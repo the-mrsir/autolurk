@@ -1,0 +1,18 @@
+---
+description: Ship finished extension changes to GitHub without waiting to be asked
+alwaysApply: true
+---
+
+# Publish finished changes
+
+The Update button installs the public GitHub repo. A change that exists only in this folder is not shipped.
+
+When a change is finished and `node tests/run.js` passes:
+
+1. Bump `manifest.json` and `package.json` to the same next `x.y.z` version.
+2. Commit the change.
+3. Push to `origin` `main`.
+
+Do that in the same turn as the change. Do not stop after editing files and tell the user to reload `chrome://extensions`, and do not wait for them to say "update" or "push".
+
+Leave it uncommitted only when they are still deciding, or they explicitly say not to publish. Do not commit secrets. Do not change or remove the manifest `key`. Do not force-push.
