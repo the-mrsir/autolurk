@@ -10,6 +10,9 @@ export const ALARMS = {
   STREAK_CHECK: "streak-check",
   UPDATE_CHECK: "update-check",
   SERVER_ROTATE: "server-rotate",
+  // Not part of the standing schedule. Created only when the startup poll
+  // could not reach Twitch, then cleared once a poll succeeds.
+  STARTUP_POLL: "startup-poll",
 };
 
 // Bumped whenever stored data needs reshaping. See background/migrations.js.
@@ -32,6 +35,10 @@ export const SESSION_KEYS = {
   // Which stream the server rotation opened last. Session lifetime matches a
   // run of Chrome; a fresh browser starts the cycle at the beginning.
   SERVER: "serverRotation",
+  // Set on the first worker wake after the browser process starts. Session
+  // storage dies with the browser, so the next launch polls again.
+  BOOTED: "browserBooted",
+  STARTUP_POLLS: "startupPolls",
 };
 
 export const STORAGE_KEYS = {

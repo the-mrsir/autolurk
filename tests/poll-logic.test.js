@@ -4,6 +4,7 @@ import {
   mergeLiveState,
   offlineCandidates,
   POLL_STATUS,
+  startupPollNeedsRetry,
   streamIsOpenable,
 } from "../shared/poll-logic.js";
 
@@ -13,6 +14,20 @@ const stream = (userId, extra = {}) => ({
   login: `user${userId}`,
   isLive: true,
   ...extra,
+});
+
+describe("startup poll retry", () => {
+  it("tries again when Twitch could not be reached", () => {
+    assert.equal(startupPollNeedsRetry(POLL_STATUS.FAILED, 0), true);
+    assert.equal(startupPollNeedsRetry(undefined, 0), true);
+    assert.equal(startupPollNeedsRetry(POLL_STATUS.PARTIAL, 3), true);
+  });
+
+  it("stops after a successful poll, a sign-in failure, or four attempts", () => {
+    assert.equal(startupPollNeedsRetry(POLL_STATUS.OK, 0), false);
+    assert.equal(startupPollNeedsRetry(POLL_STATUS.UNAUTHORIZED, 0), false);
+    assert.equal(startupPollNeedsRetry(POLL_STATUS.FAILED, 4), false);
+  });
 });
 
 describe("classifyPoll", () => {

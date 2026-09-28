@@ -1,4 +1,5 @@
-import { ALARMS, GROUP_NAME, MESSAGE, PUBLIC_SCALE, qualityMessage } from "../shared/constants.js";
+import { ALARMS, GROUP_NAME, MESSAGE, PUBLIC_SCALE, SESSION_KEYS, qualityMessage } from "../shared/constants.js";
+import { startupPollNeedsRetry } from "../shared/poll-logic.js";
 import { makeSyncGroup, normalizeSyncGroup } from "../shared/sync-logic.js";
 import { HEALTH } from "../shared/health.js";
 import {
@@ -8,10 +9,12 @@ import {
   getLiveState,
   getManagedTabs,
   getMeta,
+  getSessionValue,
   getSettings,
   mutateMeta,
   saveMeta,
   saveSettings,
+  setSessionValue,
   updateManagedTab,
 } from "../shared/storage.js";
 import {
@@ -99,19 +102,22 @@ import {
 // Lifecycle
 //
 // In Manifest V3 this file is re-evaluated every time the worker wakes, which
-// can be many times an hour. Only listener registration and a cheap alarm
-// repair may run at module scope; anything that costs a network call or resets
-// a schedule belongs in the install/startup path.
+// can be many times an hour. Listener registration has to be synchronous.
+// Returning the promise is what keeps the worker alive until the poll finishes;
+// a listener that returns immediately lets Chrome stop the worker while the
+// startup poll is still in flight, which is a launch that never opens streams.
 // ---------------------------------------------------------------------------
 
 chrome.runtime.onInstalled.addListener(() => {
-  initialize({ reset: true }).catch((error) => console.warn("Install init failed", error));
+  const pending = initialize({ reset: true });
+  pending.catch((error) => console.warn("Install init failed", error));
+  return pending;
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  initialize({ reset: true, startup: true }).catch((error) =>
-    console.warn("Startup init failed", error)
-  );
+  const pending = initialize({ reset: true, startup: true });
+  pending.catch((error) => console.warn("Startup init failed", error));
+  return pending;
 });
 
 // Chrome fires onInstalled and onStartup in the same session after an update,
@@ -170,9 +176,29 @@ async function runInitialize(options) {
         console.warn("Startup wake recovery failed", error)
       );
     } else {
-      pollLiveState().catch((error) => console.warn("Initial live poll failed", error));
+      await pollWhenReady();
     }
   }
+}
+
+// The first poll of a launch. Twitch is often unreachable for a few seconds
+// after the window appears; a failure here used to wait for the regular poll,
+// which is minutes away, so nothing happened until Refresh.
+async function pollWhenReady() {
+  let result = null;
+  try {
+    result = await pollLiveState();
+  } catch (error) {
+    console.warn("Initial live poll failed", error);
+  }
+  const attempts = Number(await getSessionValue(SESSION_KEYS.STARTUP_POLLS, 0)) || 0;
+  if (!startupPollNeedsRetry(result?.status, attempts)) {
+    await chrome.alarms.clear(ALARMS.STARTUP_POLL);
+    return result;
+  }
+  await setSessionValue(SESSION_KEYS.STARTUP_POLLS, attempts + 1);
+  await chrome.alarms.create(ALARMS.STARTUP_POLL, { delayInMinutes: 0.25 });
+  return result;
 }
 
 function randomMinutes(min, max) {
@@ -239,6 +265,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     switch (alarm.name) {
       case ALARMS.POLL_LIVE:
         await pollLiveState();
+        return;
+      case ALARMS.STARTUP_POLL:
+        await pollWhenReady();
+        await buildSnapshot();
         return;
       case ALARMS.HEALTH_CHECK:
         // Group repair must run first. Player probes can take several seconds
@@ -369,6 +399,9 @@ const PAGE_MESSAGES = new Set([
 ]);
 
 async function handleMessage(message, sender) {
+  // Opening the dashboard used to only read the last snapshot. The launch poll
+  // has to finish first, or the page sits there until Refresh.
+  await startupReady;
   const type = message?.type;
   if (PAGE_MESSAGES.has(type) && !isExtensionPage(sender)) {
     throw new Error("That action is only available from the AutoLurk UI.");
@@ -822,8 +855,22 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
   }
 });
 
-// Repair alarms Chrome dropped without restarting healthy schedules. This is
-// the only work allowed to run on a plain worker wake.
+// Repair alarms Chrome dropped without restarting healthy schedules.
 scheduleAlarms({ reset: false }).catch((error) => {
   console.warn("Alarm check failed", error);
 });
+
+// onStartup is not delivered when Chrome starts a worker that was not already
+// running. Session storage is empty after the browser process starts and
+// survives the worker being killed later, so the first wake of a session — an
+// alarm, a restored tab, or the dashboard — runs the launch poll. Later wakes
+// in the same session leave the schedule alone.
+const startupReady = ensureBrowserStartup();
+
+async function ensureBrowserStartup() {
+  if (await getSessionValue(SESSION_KEYS.BOOTED, false)) return;
+  await setSessionValue(SESSION_KEYS.BOOTED, true);
+  await initialize({ reset: true, startup: true }).catch((error) =>
+    console.warn("Startup init failed", error)
+  );
+}

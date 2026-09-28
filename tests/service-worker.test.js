@@ -13,7 +13,7 @@ await import("../background/service-worker.js");
 
 // Snapshot the alarm table as it stands just after the worker booted. Later
 // suites reset the mock, so the wake behaviour has to be captured here.
-await new Promise((resolve) => setTimeout(resolve, 20));
+await new Promise((resolve) => setTimeout(resolve, 150));
 const alarmsAtWake = new Map(mock.alarms);
 
 describe("service worker wake", () => {

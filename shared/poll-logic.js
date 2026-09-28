@@ -11,6 +11,15 @@ export const POLL_STATUS = {
   UNAUTHORIZED: "unauthorized",
 };
 
+// A startup poll that never reaches Twitch has to try again. The network is
+// often still down in the first seconds after the browser window appears, and
+// waiting for the regular multi-minute poll is what makes a fresh launch look
+// idle until someone hits Refresh. Sign-in failures are not that case.
+export function startupPollNeedsRetry(status, attempts) {
+  if (status === POLL_STATUS.OK || status === POLL_STATUS.UNAUTHORIZED) return false;
+  return Number(attempts) < 4;
+}
+
 export function classifyPoll({ followedFailure = null, favoriteFailure = null } = {}) {
   if (followedFailure === "unauthorized" || favoriteFailure === "unauthorized") {
     return POLL_STATUS.UNAUTHORIZED;
