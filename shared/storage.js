@@ -57,6 +57,9 @@ function mutateStored(key, read, mutator) {
 export async function getSettings() {
   const result = await chrome.storage.local.get(STORAGE_KEYS.SETTINGS);
   const settings = { ...DEFAULT_SETTINGS, ...(result[STORAGE_KEYS.SETTINGS] || {}) };
+  if (!String(settings.updateManifestUrl || "").trim()) {
+    settings.updateManifestUrl = DEFAULT_SETTINGS.updateManifestUrl;
+  }
   if (PUBLISHED_CLIENT_ID) {
     settings.clientId = PUBLISHED_CLIENT_ID;
     settings.publishedApp = true;

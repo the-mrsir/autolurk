@@ -33,9 +33,9 @@ Both computers have to show the same extension ID on that page. Do not change or
 
 Chrome will not update an extension loaded from a folder.
 
-**Settings → Updates** takes a public GitHub repository with this extension at the root. This one is https://github.com/the-mrsir/autolurk. Save it and click **Check for updates** once so Chrome can reach GitHub. After that it checks about twice a day.
+**Settings → Updates** is already pointed at https://github.com/the-mrsir/autolurk. Click **Check for updates** once so Chrome can reach GitHub. After that it checks about twice a day.
 
-When the repo's `manifest.json` version is higher, **Update** appears. The first time, choose the folder you loaded. The extension reloads itself.
+When the repo's `manifest.json` version is higher, **Update** appears. The first time, a page opens so you can choose the folder you loaded. The extension reloads itself.
 
 To publish an update, raise `version` in `manifest.json` and `package.json` and push.
 

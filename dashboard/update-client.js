@@ -65,8 +65,8 @@ async function extensionFolder() {
     await rememberFolder(picked);
     return picked;
   } catch (error) {
-    // Chrome aborts the picker immediately on an extension page. A Twitch tab
-    // can still open it.
+    // Chrome aborts the picker immediately on an extension page. A normal
+    // web page can still open it.
     if (error?.name === "AbortError") return null;
     throw error;
   }
@@ -85,36 +85,100 @@ function tabLoaded(tabId) {
       resolve();
     }
     chrome.tabs.onUpdated.addListener(onUpdated);
+    chrome.tabs.get(tabId).then((tab) => {
+      if (tab.status === "complete") onUpdated(tabId, { status: "complete" });
+    }).catch((error) => {
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(onUpdated);
+      reject(error);
+    });
   });
 }
 
-async function sendWhenReady(tabId, message) {
-  let last = "The Twitch tab did not load the updater.";
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+// Runs on a normal web page. Extension pages are not given the folder picker.
+function chooseFolderAndWrite(entries, expected) {
+  const root = document.createElement("div");
+  root.id = "autolurk-update";
+  root.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#16171d;color:#f2f2f2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font:16px/1.4 Segoe UI,sans-serif;text-align:center;padding:24px;";
+  const title = document.createElement("p");
+  title.textContent = "Choose the folder you loaded on chrome://extensions. It contains manifest.json.";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Choose AutoLurk folder";
+  button.style.cssText = "font:inherit;padding:10px 16px;cursor:pointer;";
+  const status = document.createElement("p");
+  root.append(title, button, status);
+  document.documentElement.append(root);
+
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    status.textContent = "Waiting for the folder…";
     try {
-      return await chrome.tabs.sendMessage(tabId, message);
+      const picker = globalThis.showDirectoryPicker;
+      if (typeof picker !== "function") throw new Error("This page cannot choose a folder.");
+      const dir = await picker({ mode: "readwrite", id: "autolurk-extension" });
+      let manifest;
+      try {
+        manifest = JSON.parse(await (await (await dir.getFileHandle("manifest.json")).getFile()).text());
+      } catch {
+        throw new Error("That folder is not AutoLurk. Choose the folder you loaded on chrome://extensions.");
+      }
+      if (manifest.name !== expected.name || (expected.key && manifest.key !== expected.key)) {
+        throw new Error("That folder is a different extension. Choose the AutoLurk folder.");
+      }
+      for (const [path, data] of entries) {
+        const parts = String(path).split("/");
+        let current = dir;
+        for (let index = 0; index < parts.length - 1; index += 1) {
+          current = await current.getDirectoryHandle(parts[index], { create: true });
+        }
+        const handle = await current.getFileHandle(parts[parts.length - 1], { create: true });
+        const writable = await handle.createWritable();
+        await writable.write(new Uint8Array(data));
+        await writable.close();
+      }
+      status.dataset.autolurkVersion = expected.version;
+      status.textContent = `Version ${expected.version} is in place. Returning to AutoLurk…`;
     } catch (error) {
-      last = error?.message || last;
-      if (!/Receiving end does not exist|Could not establish connection/i.test(last)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      button.disabled = false;
+      status.textContent = error?.name === "AbortError" ? "Choose the AutoLurk folder to continue." : error.message;
+    }
+  });
+}
+
+function readInstalledVersion() {
+  return document.querySelector("#autolurk-update [data-autolurk-version]")?.dataset.autolurkVersion || "";
+}
+
+async function installViaPage(files, expected) {
+  const tab = await chrome.tabs.create({ url: "https://example.com/", active: true });
+  await tabLoaded(tab.id);
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: "MAIN",
+    func: chooseFolderAndWrite,
+    args: [[...files].map(([path, bytes]) => [path, Array.from(bytes)]), expected],
+  });
+
+  const started = Date.now();
+  while (Date.now() - started < 5 * 60 * 1000) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    let result;
+    try {
+      [result] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        world: "MAIN",
+        func: readInstalledVersion,
+      });
+    } catch {
+      throw new Error("The folder page was closed before the update finished.");
+    }
+    if (result?.result) {
+      await chrome.tabs.remove(tab.id);
+      return result.result;
     }
   }
-  throw new Error(last);
-}
-
-// Extension pages do not get the folder picker. A normal Twitch tab does, and
-// a content script is already allowed to run there.
-async function installViaTwitchTab(files, expected) {
-  const tab = await chrome.tabs.create({ url: "https://www.twitch.tv/", active: true });
-  if (tab.status !== "complete") await tabLoaded(tab.id);
-  const response = await sendWhenReady(tab.id, {
-    type: "APPLY_UPDATE_FILES",
-    entries: [...files].map(([path, bytes]) => [path, Array.from(bytes)]),
-    expected,
-  });
-  if (!response?.ok) throw new Error(response?.error || "The update was not written.");
-  await chrome.tabs.remove(tab.id);
-  return response.version;
+  throw new Error("The update was not finished.");
 }
 
 async function readJson(dir, name) {
@@ -154,11 +218,21 @@ async function downloadPackage(packageUrl) {
 
 // Downloads the package and replaces the loaded folder. The caller reloads.
 export async function installUpdatePackage(packageUrl) {
+  // This has to be the first wait. Chrome only shows the permission prompt
+  // during the click, and the settings page cannot open the folder picker.
+  const pageAllowed = await chrome.permissions.request({
+    permissions: ["scripting"],
+    origins: ["https://example.com/*"],
+  });
+  if (!pageAllowed && !directoryPicker()) {
+    throw new Error("Chrome did not allow the folder picker to open.");
+  }
   await allowUpdateOrigin(packageUrl);
   const { files, next, running } = await downloadPackage(packageUrl);
   const folder = await extensionFolder();
   if (!folder) {
-    return installViaTwitchTab(files, { name: running.name, key: running.key || "", version: next.version });
+    if (!pageAllowed) throw new Error("Chrome did not allow the folder picker to open.");
+    return installViaPage(files, { name: running.name, key: running.key || "", version: next.version });
   }
 
   let current;

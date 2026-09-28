@@ -208,8 +208,8 @@ export const DEFAULT_SETTINGS = {
   // tabs stay in the background either way.
   streakOpenInFront: true,
   // A public GitHub repository, or a JSON file { version, packageUrl }.
-  // Empty until it is set. Chrome does not update an unpacked folder on its own.
-  updateManifestUrl: "",
+  // Blank uses this repository. Chrome does not update an unpacked folder on its own.
+  updateManifestUrl: "https://github.com/the-mrsir/autolurk",
   sevenTvEnabled: true,
   // Shares favorites and preferences with the user's other computers through
   // the Chrome profile. The Twitch login is never included. syncGroup is filled
