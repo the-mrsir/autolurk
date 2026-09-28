@@ -394,7 +394,16 @@
             '[data-a-target="player-settings-menu"], [data-a-target="player-settings-menu-item-quality"], [data-a-player-type="site"], .persistent-player, .video-player__container'
           )
       );
+    let callbacks = 0;
     qualityObserver = new MutationObserver((records) => {
+      callbacks += 1;
+      // A hunt that never sees the menu used to watch every chat message for
+      // the rest of the stream. A few seconds of mutations is enough for the
+      // gear to render; the next probe retries if the picture is still wrong.
+      if (callbacks > 400) {
+        stop(openedSettings || openedQuality);
+        return;
+      }
       const relevant = records.some((record) => {
         if (playerUi(record.target)) return true;
         return [...(record.addedNodes || [])].some((node) => playerUi(node));
@@ -402,8 +411,13 @@
       if (relevant) advance();
     });
     const start = () => {
-      qualityObserver.observe(document.documentElement, { childList: true, subtree: true });
       advance();
+      if (!qualityObserver) return;
+      if (!openedSettings && !openedQuality) {
+        stopQualityHunt();
+        return;
+      }
+      qualityObserver.observe(document.documentElement, { childList: true, subtree: true });
     };
     if (document.documentElement) start();
     else document.addEventListener("DOMContentLoaded", start, { once: true });
@@ -681,7 +695,10 @@
   function onTimeUpdate(event) {
     if (!managedTab) return;
     const video = event.target;
-    if (video !== getVideo()) return;
+    // timeupdate also fires for sidebar previews, several times a second, in
+    // every lurk tab. Measuring those forces layout. Only the claimed player
+    // is worth a report, and only when it has actually moved.
+    if (!video?.hasAttribute?.(MANAGED_FLAG)) return;
     if (Math.abs(video.currentTime - lastReportedTime) < 5) return;
     lastReportedTime = video.currentTime;
     report();

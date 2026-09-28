@@ -189,23 +189,20 @@
     resolvePendingClaim(widget);
     reportBalance();
   });
-  const discoveryObserver = new MutationObserver(() => {
-    if (pointsWidget()) scheduleScan();
-  });
 
   function watch(widget) {
     if (widget === watchedWidget) return;
     watchedWidget = widget;
     widgetObserver.disconnect();
-    if (widget) {
-      widgetObserver.observe(widget, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ["class", "disabled", "hidden", "aria-hidden"],
-      });
-      discoveryObserver.disconnect();
-    }
+    if (!widget) return;
+    // The chest lives in this widget. Watching the whole document meant every
+    // chat message on every lurk tab woke this script.
+    widgetObserver.observe(widget, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "disabled", "hidden", "aria-hidden"],
+    });
   }
 
   function scan() {
@@ -228,26 +225,11 @@
     });
   }
 
-  if (document.documentElement) {
-    discoveryObserver.observe(document.documentElement, { childList: true, subtree: true });
-  } else {
-    document.addEventListener(
-      "DOMContentLoaded",
-      () => discoveryObserver.observe(document.documentElement, { childList: true, subtree: true }),
-      { once: true }
-    );
-  }
-
   scheduleScan();
   setInterval(() => {
-    // Also rediscovers a widget Twitch replaced wholesale while the tab was
-    // hidden. The interval is fallback; normal claims are mutation-driven.
-    if (!watchedWidget?.isConnected) {
-      watchedWidget = null;
-      if (document.documentElement) {
-        discoveryObserver.observe(document.documentElement, { childList: true, subtree: true });
-      }
-    }
+    // Twitch replaces the widget wholesale. The chest stays up for minutes,
+    // so the next pass of this scan is in time without watching chat.
+    if (!watchedWidget?.isConnected) watchedWidget = null;
     scan();
   }, SCAN_INTERVAL_MS);
 })();

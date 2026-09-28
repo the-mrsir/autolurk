@@ -189,16 +189,6 @@ function tabLoaded(tabId) {
   });
 }
 
-function readPickerState() {
-  const status = document.getElementById("autolurk-update-status");
-  return {
-    ready: document.documentElement.dataset.autolurkPicker || "",
-    picking: status?.dataset.autolurkPicking || "",
-    picked: status?.dataset.autolurkPicked || "",
-    error: status?.dataset.autolurkError || "",
-  };
-}
-
 function postJob(payload) {
   const node = document.getElementById("autolurk-job");
   if (!node) throw new Error("The folder page was closed before the update finished.");
@@ -218,11 +208,11 @@ function readJobState() {
   };
 }
 
-async function onPage(tabId, func, args) {
+async function onPage(tabId, func, args, world = "MAIN") {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const details = { target: { tabId }, world: "MAIN", func };
+      const details = { target: { tabId }, world, func };
       if (Array.isArray(args)) details.args = args;
       const [result] = await chrome.scripting.executeScript(details);
       return result?.result;
@@ -234,64 +224,96 @@ async function onPage(tabId, func, args) {
   throw new Error(lastError?.message || "The folder page could not be used.");
 }
 
-async function pickerState(tabId) {
+// Lives in the tab's isolated world, so it can talk to the extension without
+// the extension injecting again. Repeated injection was closing the folder
+// dialog before a directory could be chosen.
+function folderBridge() {
+  const send = () => {
+    const status = document.getElementById("autolurk-update-status");
+    chrome.runtime.sendMessage({
+      source: "autolurk-folder",
+      ready: document.documentElement.dataset.autolurkPicker || "",
+      picked: status?.dataset.autolurkPicked || "",
+      error: status?.dataset.autolurkError || "",
+    });
+  };
+  send();
+  new MutationObserver(send).observe(document.documentElement, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["data-autolurk-picker", "data-autolurk-picked", "data-autolurk-error"],
+  });
+}
+
+function watchFolder(tabId) {
+  let settled = false;
+  let cleanup = () => {};
+  const done = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(reject, new Error("Choose the AutoLurk folder in the tab that opened.")), 5 * 60 * 1000);
+    const onRemoved = (id) => {
+      if (id === tabId) finish(reject, new Error("The folder tab was closed before a folder was chosen."));
+    };
+    const onMessage = (message, sender) => {
+      if (sender?.tab?.id !== tabId || message?.source !== "autolurk-folder") return;
+      if (message.picked === "1") finish(resolve);
+      else if (message.ready && message.ready !== "function") {
+        finish(reject, new Error(message.error || "This page cannot choose a folder."));
+      }
+    };
+    function finish(settle, error) {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      if (error) settle(error);
+      else settle();
+    }
+    cleanup = () => {
+      clearTimeout(timer);
+      chrome.tabs.onRemoved.removeListener(onRemoved);
+      chrome.runtime.onMessage.removeListener(onMessage);
+    };
+    chrome.tabs.onRemoved.addListener(onRemoved);
+    chrome.runtime.onMessage.addListener(onMessage);
+  });
+  return {
+    done,
+    cancel() {
+      if (settled) return;
+      settled = true;
+      cleanup();
+    },
+  };
+}
+
+async function installViaPage(expected, onStatus) {
+  const tab = await chrome.tabs.create({ url: PICKER_PAGE, active: true });
+  if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+  const folder = watchFolder(tab.id);
   try {
-    return (await onPage(tabId, readPickerState)) || { ready: "", picking: "", picked: "", error: "" };
-  } catch {
-    throw new Error("The folder page was closed before the update finished.");
+    await tabLoaded(tab.id);
+    await onPage(tab.id, pickerBoot, [expected]);
+    await onPage(tab.id, folderBridge, undefined, "ISOLATED");
+    onStatus("Choose the AutoLurk folder in the tab that opened. Leave that tab open.");
+    await folder.done;
+    return tab.id;
+  } catch (error) {
+    folder.cancel();
+    throw error;
   }
 }
 
-async function installViaPage(files, expected, onStatus) {
-  const tab = await chrome.tabs.create({ url: PICKER_PAGE, active: true });
-  if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
-  await tabLoaded(tab.id);
-  await onPage(tab.id, pickerBoot, [expected]).catch(() => {});
-  onStatus("Choose the AutoLurk folder in the tab that opened. Leave that tab open.");
-
-  const started = Date.now();
-  let picked = false;
-  while (Date.now() - started < 5 * 60 * 1000) {
-    const state = await pickerState(tab.id);
-    // The folder dialog is open. Injecting again would rebuild the page under it.
-    if (state.picking) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      continue;
-    }
-    if (state.ready && state.ready !== "function") {
-      throw new Error(state.error || "This page cannot choose a folder.");
-    }
-    if (state.ready !== "function") {
-      try {
-        await onPage(tab.id, pickerBoot, [expected]);
-      } catch {
-        // The document can still be navigating. The next pass tries again.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      continue;
-    }
-    if (state.picked) {
-      picked = true;
-      break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 400));
-  }
-  if (!picked) {
-    await chrome.tabs.remove(tab.id).catch(() => {});
-    throw new Error("The folder was not chosen. Click Update again and leave the folder tab open until you choose it.");
-  }
-
+async function writeChosenFolder(tabId, files, version) {
   let jobId = 1;
   for (const [path, bytes] of files) {
-    await runPageJob(tab.id, { id: jobId, path, data: bytesToBase64(bytes) });
+    await runPageJob(tabId, { id: jobId, path, data: bytesToBase64(bytes) });
     jobId += 1;
   }
-  const written = await runPageJob(tab.id, { id: jobId, op: "version" });
-  await chrome.tabs.remove(tab.id).catch(() => {});
-  if (written.version !== expected.version) {
+  const written = await runPageJob(tabId, { id: jobId, op: "version" });
+  await chrome.tabs.remove(tabId).catch(() => {});
+  if (written.version !== version) {
     throw new Error("The folder did not update. Choose the folder you loaded on chrome://extensions.");
   }
-  return expected.version;
+  return version;
 }
 
 async function runPageJob(tabId, job) {
@@ -345,15 +367,12 @@ export async function installUpdatePackage(packageUrl, onStatus = () => {}) {
   }
   if (!allowed) throw new Error("Chrome did not allow the folder page.");
 
-  onStatus("Downloading the update…");
-  const { files, next, running } = await downloadPackage(packageUrl);
-  return installViaPage(
-    files,
-    {
-      name: running.name,
-      key: running.key || "",
-      version: next.version,
-    },
+  const running = chrome.runtime.getManifest();
+  const tabId = await installViaPage(
+    { name: running.name, key: running.key || "", version: "" },
     onStatus
   );
+  onStatus("Downloading the update…");
+  const { files, next } = await downloadPackage(packageUrl);
+  return writeChosenFolder(tabId, files, next.version);
 }

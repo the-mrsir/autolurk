@@ -185,9 +185,10 @@ describe("extension updates", () => {
     assert.ok(boot.includes("showDirectoryPicker"));
     const client = readFileSync(new URL("../dashboard/update-client.js", import.meta.url), "utf8");
     assert.equal(client.includes("The folder picker did not start."), false);
-    const gaveUp = client.indexOf("if (!picked)");
+    const chosen = client.indexOf("await folder.done");
     const removed = client.indexOf("chrome.tabs.remove");
-    assert.ok(gaveUp !== -1 && removed > gaveUp, "the folder tab is closed before it can be chosen");
+    assert.equal((client.match(/chrome\.tabs\.remove/g) || []).length, 1);
+    assert.ok(chosen !== -1 && removed > chosen, "the folder tab is closed before it can be chosen");
   });
 
   it("records a newer package from a GitHub repository", async () => {
