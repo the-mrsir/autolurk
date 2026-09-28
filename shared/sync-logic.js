@@ -48,7 +48,13 @@ export function scopePrefix(group) {
 }
 
 // Machine-specific or derived, so they must not travel.
-export const UNSYNCED_SETTINGS = new Set(["clientId", "publishedApp", "syncGroup"]);
+export const UNSYNCED_SETTINGS = new Set([
+  "clientId",
+  "publishedApp",
+  "syncGroup",
+  "backgroundQuality",
+  "watchingQuality",
+]);
 
 // A tombstone is kept this long. It only has to outlive the longest realistic
 // gap between a machine being switched off and switched on again; keeping them

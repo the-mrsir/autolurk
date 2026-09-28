@@ -14,7 +14,7 @@ Connect Twitch from the dashboard. Sign in on each computer. The Twitch login is
 
 - Live favorites open as background tabs in one **AutoLurk** group. The tab you are using stays in front, unless **Open streams in front** is set to favorites or all.
 - The player stays unmuted. The Chrome tab is muted.
-- Background tabs play at 160p. The tab you are looking at plays at 1080p.
+- Background tabs and the stream you are looking at each have a quality setting. They start at 160p and 1080p.
 - Tabs close when the stream ends or raids away. A tab you close yourself stays closed until the next broadcast.
 - Channel point bonus chests are claimed. Nothing is spent.
 - Expiring watch streaks open a recovery clip or VOD, in front by default, and that tab closes when Twitch clears the expiration.

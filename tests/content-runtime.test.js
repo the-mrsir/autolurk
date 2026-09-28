@@ -123,7 +123,7 @@ describe("player behavior inside a Twitch page", () => {
     assert.ok(selected1080, "opening a managed stream did not select 1080p");
     assert.equal(
       localStorage.getItem("video-quality"),
-      JSON.stringify({ default: "auto" }),
+      JSON.stringify({ default: "1080p60" }),
       "an opened managed stream did not leave lurk quality"
     );
     context.document.visibilityState = "hidden";
@@ -137,8 +137,18 @@ describe("player behavior inside a Twitch page", () => {
     listeners[0]({ type: "PIN_HIGH_QUALITY" }, {}, () => {});
     assert.equal(
       localStorage.getItem("video-quality"),
-      JSON.stringify({ default: "auto" }),
+      JSON.stringify({ default: "1080p60" }),
       "an unmuted background stream kept the 160p preference"
+    );
+    listeners[0](
+      { type: "PIN_LOW_QUALITY", backgroundQuality: "360p30", watchingQuality: "480p30" },
+      {},
+      () => {}
+    );
+    assert.equal(
+      localStorage.getItem("video-quality"),
+      JSON.stringify({ default: "360p30" }),
+      "a chosen background quality was ignored"
     );
   });
 
@@ -201,8 +211,8 @@ describe("player behavior inside a Twitch page", () => {
     assert.equal(selected160, false, "the quality menu was driven to 160p while visible");
     assert.equal(
       localStorage.getItem("video-quality"),
-      JSON.stringify({ default: "auto" }),
-      "a visible tab had its quality preference overwritten"
+      JSON.stringify({ default: "1080p60" }),
+      "a visible tab was forced down to the background quality"
     );
   });
 

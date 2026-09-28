@@ -186,6 +186,35 @@ export function opensInFront(settings, favorite) {
   return false;
 }
 
+// Twitch's own quality ids. 160p is the lightest decode; Source is whatever the
+// channel is sending. Content scripts repeat this list because they cannot
+// import it.
+export const STREAM_QUALITIES = [
+  { id: "160p30", label: "160p" },
+  { id: "360p30", label: "360p" },
+  { id: "480p30", label: "480p" },
+  { id: "720p30", label: "720p" },
+  { id: "720p60", label: "720p60" },
+  { id: "1080p60", label: "1080p" },
+  { id: "chunked", label: "Source" },
+];
+
+export const DEFAULT_BACKGROUND_QUALITY = "160p30";
+export const DEFAULT_WATCHING_QUALITY = "1080p60";
+
+export function streamQuality(value, fallback) {
+  const id = String(value || "");
+  return STREAM_QUALITIES.some((item) => item.id === id) ? id : fallback;
+}
+
+export function qualityMessage(type, settings) {
+  return {
+    type,
+    backgroundQuality: streamQuality(settings?.backgroundQuality, DEFAULT_BACKGROUND_QUALITY),
+    watchingQuality: streamQuality(settings?.watchingQuality, DEFAULT_WATCHING_QUALITY),
+  };
+}
+
 export const DEFAULT_SETTINGS = {
   clientId: "",
   automationEnabled: true,
@@ -216,6 +245,9 @@ export const DEFAULT_SETTINGS = {
   // Automatic streams stay behind the tab the user is on. "favorites" brings
   // starred channels to the front. "all" does that for every stream AutoLurk opens.
   openInFront: "off",
+  // Per computer. A laptop and a desktop do not want the same decode size.
+  backgroundQuality: "160p30",
+  watchingQuality: "1080p60",
   // A public GitHub repository, or a JSON file { version, packageUrl }.
   // Blank uses this repository. Chrome does not update an unpacked folder on its own.
   updateManifestUrl: "https://github.com/the-mrsir/autolurk",

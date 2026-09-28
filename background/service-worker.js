@@ -1,4 +1,4 @@
-import { ALARMS, GROUP_NAME, MESSAGE, PUBLIC_SCALE } from "../shared/constants.js";
+import { ALARMS, GROUP_NAME, MESSAGE, PUBLIC_SCALE, qualityMessage } from "../shared/constants.js";
 import { makeSyncGroup, normalizeSyncGroup } from "../shared/sync-logic.js";
 import { HEALTH } from "../shared/health.js";
 import {
@@ -68,6 +68,7 @@ import {
   focusOrOpen,
   getManagedTabForUser,
   isBootstrapActivation,
+  pinAllManagedQualities,
   reconcileManagedTabs,
   releaseManagedTab,
   updateLiveGroup,
@@ -414,6 +415,12 @@ async function handleMessage(message, sender) {
       }
       // The check interval lives in the alarm period, so rebuild the schedule.
       await scheduleAlarms({ reset: true });
+      if (
+        previous.backgroundQuality !== settings.backgroundQuality ||
+        previous.watchingQuality !== settings.watchingQuality
+      ) {
+        await pinAllManagedQualities();
+      }
       // Open Twitch tabs cache the claim setting, so tell them it moved.
       await broadcastConfigChange();
       if (previous.saveWatchStreaks && !settings.saveWatchStreaks) {
@@ -662,7 +669,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
           : tab?.active
             ? MESSAGE.PIN_VIEWING_QUALITY
             : MESSAGE.PIN_LOW_QUALITY;
-        await chrome.tabs.sendMessage(Number(tabId), { type }).catch(() => {});
+        const settings = await getSettings();
+        await chrome.tabs.sendMessage(Number(tabId), qualityMessage(type, settings)).catch(() => {});
       }
     }
 
@@ -682,7 +690,7 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     await wakeManagedTab(activeInfo.tabId);
-    const managed = await getManagedTabs();
+    const [managed, settings] = await Promise.all([getManagedTabs(), getSettings()]);
     const others = await Promise.all(
       Object.values(managed)
         .filter((entry) => Number(entry.tabId) !== Number(activeInfo.tabId))
@@ -696,20 +704,26 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         .filter(({ tab }) => tab && !tab.active)
         .map(({ entry, tab }) =>
           chrome.tabs
-            .sendMessage(Number(tab.id), {
-              type: entry.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_LOW_QUALITY,
-            })
+            .sendMessage(
+              Number(tab.id),
+              qualityMessage(
+                entry.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_LOW_QUALITY,
+                settings
+              )
+            )
             .catch(() => {})
         )
     );
     if (!isBootstrapActivation(activeInfo.tabId)) {
       const activeEntry = managed[String(activeInfo.tabId)];
       await chrome.tabs
-        .sendMessage(activeInfo.tabId, {
-          type: activeEntry?.userUnmuted
-            ? MESSAGE.PIN_HIGH_QUALITY
-            : MESSAGE.PIN_VIEWING_QUALITY,
-        })
+        .sendMessage(
+          activeInfo.tabId,
+          qualityMessage(
+            activeEntry?.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_VIEWING_QUALITY,
+            settings
+          )
+        )
         .catch(() => {});
     }
   } catch (error) {

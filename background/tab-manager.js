@@ -1,4 +1,4 @@
-import { GROUP_NAME, MESSAGE, SESSION_KEYS } from "../shared/constants.js";
+import { GROUP_NAME, MESSAGE, SESSION_KEYS, qualityMessage } from "../shared/constants.js";
 import {
   getManagedTabs,
   getMeta,
@@ -30,7 +30,8 @@ import {
 // happens second closes the gap.
 export async function announceManaged(tabId) {
   try {
-    await chrome.tabs.sendMessage(Number(tabId), { type: MESSAGE.MANAGED_NOW });
+    const settings = await getSettings();
+    await chrome.tabs.sendMessage(Number(tabId), qualityMessage(MESSAGE.MANAGED_NOW, settings));
   } catch {
     // Page has not injected yet. Its own AM_I_MANAGED will find the entry.
   }
@@ -54,7 +55,8 @@ async function pinQualityForTab(tabId) {
       ? MESSAGE.PIN_VIEWING_QUALITY
       : MESSAGE.PIN_LOW_QUALITY;
   try {
-    await chrome.tabs.sendMessage(Number(tabId), { type });
+    const settings = await getSettings();
+    await chrome.tabs.sendMessage(Number(tabId), qualityMessage(type, settings));
   } catch {
     // A fresh page may not have injected yet; document_start and the next
     // visibility pass still apply the matching preference.
@@ -647,7 +649,7 @@ async function showAndRestart(tabId, options = {}) {
     // quality pin is written at document_start or not at all. Adding only a
     // fragment is a same-document navigation, so the reload forces a real one.
     await chrome.tabs.update(Number(tabId), {
-      url: managedChannelUrl(entry.expectedChannel || entry.login),
+      url: managedChannelUrl(entry.expectedChannel || entry.login, await getSettings()),
     });
     await chrome.tabs.reload(Number(tabId));
     } catch {
@@ -795,7 +797,7 @@ async function bootstrapManagedStream(channel, stream, options, settings, login)
   try {
     if (options.focus) {
       tab = await chrome.tabs.create({
-        url: managedChannelUrl(login),
+        url: managedChannelUrl(login, settings),
         active: true,
         ...(home != null ? { windowId: home } : {}),
       });
@@ -804,7 +806,7 @@ async function bootstrapManagedStream(channel, stream, options, settings, login)
       // for it, is what made Twitch unmount the player. No temporary window
       // and no focus change, so this does not cover whatever the user is doing.
       tab = await chrome.tabs.create({
-        url: managedChannelUrl(login),
+        url: managedChannelUrl(login, settings),
         active: false,
         ...(home != null ? { windowId: home } : {}),
       });
@@ -1190,7 +1192,7 @@ export async function wakeManagedTab(tabId, options = {}) {
 
   try {
     await chrome.tabs.update(tab.id, { autoDiscardable: false });
-    await chrome.tabs.update(tab.id, { url: managedChannelUrl(entry.expectedChannel) });
+    await chrome.tabs.update(tab.id, { url: managedChannelUrl(entry.expectedChannel, await getSettings()) });
   } catch {
     try {
       await chrome.tabs.reload(tab.id);
@@ -1422,6 +1424,24 @@ async function moveIntoWindow(tabIds, windowId) {
     } catch {
       // Tab or window went away mid-move.
     }
+  }
+}
+
+export async function pinAllManagedQualities() {
+  const [managed, settings] = await Promise.all([getManagedTabs(), getSettings()]);
+  for (const entry of Object.values(managed)) {
+    let tab;
+    try {
+      tab = await chrome.tabs.get(Number(entry.tabId));
+    } catch {
+      continue;
+    }
+    const type = entry.userUnmuted
+      ? MESSAGE.PIN_HIGH_QUALITY
+      : tab.active
+        ? MESSAGE.PIN_VIEWING_QUALITY
+        : MESSAGE.PIN_LOW_QUALITY;
+    await chrome.tabs.sendMessage(Number(tab.id), qualityMessage(type, settings)).catch(() => {});
   }
 }
 

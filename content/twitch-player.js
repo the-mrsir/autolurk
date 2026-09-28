@@ -37,9 +37,39 @@
   let keepHighQualityWhileHidden = false;
 
   // Twitch reads these once, as the player boots, so they are written at
-  // document_start before its bundle runs.
-  const LURK_QUALITY = "160p30";
-  const VIEWING_QUALITY = "1080p";
+  // document_start before its bundle runs. The hash is the only synchronous
+  // copy of the settings; later messages refresh them without a reload.
+  const STREAM_QUALITY_IDS = ["160p30", "360p30", "480p30", "720p30", "720p60", "1080p60", "chunked"];
+
+  function hashQuality(flag, fallback) {
+    const match = String(location.hash || "").match(new RegExp("[&?]" + flag + "=([^&]+)"));
+    let value = "";
+    try {
+      value = match ? decodeURIComponent(match[1]) : "";
+    } catch {
+      value = "";
+    }
+    return STREAM_QUALITY_IDS.includes(value) ? value : fallback;
+  }
+
+  let backgroundQuality = hashQuality("b", "160p30");
+  let watchingQuality = hashQuality("w", "1080p60");
+
+  function useQualityMessage(message) {
+    if (STREAM_QUALITY_IDS.includes(message?.backgroundQuality)) {
+      backgroundQuality = message.backgroundQuality;
+    }
+    if (STREAM_QUALITY_IDS.includes(message?.watchingQuality)) {
+      watchingQuality = message.watchingQuality;
+    }
+  }
+
+  function qualityDetail(mode) {
+    return {
+      mode,
+      quality: mode === "low" ? backgroundQuality : watchingQuality,
+    };
+  }
 
   function currentChannel() {
     return extractChannel(location.pathname) || "";
@@ -184,12 +214,58 @@
   let qualityObserver = null;
   let lastLurkQualityHuntAt = 0;
 
-  function qualityOptionMatches(option, quality) {
+  function optionProfile(option) {
     const text = String(option.textContent || "").toLowerCase();
-    const target = String(quality || "auto").toLowerCase();
-    if (target === "auto") return text.includes("auto");
-    if (target === "chunked") return text.includes("source");
-    return text.includes(target.replace(/30$/, ""));
+    const match = text.match(/(\d{3,4})p(\d{2})?/);
+    const source = text.includes("source");
+    return {
+      height: match ? Number(match[1]) : source ? 10000 : 0,
+      fps: match && match[2] ? Number(match[2]) : 30,
+      source,
+    };
+  }
+
+  function wantedProfile(quality) {
+    if (quality === "chunked") return { height: 10000, fps: 60, source: true };
+    const match = String(quality).match(/^(\d+)p(\d+)?/);
+    return {
+      height: match ? Number(match[1]) : 0,
+      fps: match && match[2] ? Number(match[2]) : 30,
+      source: false,
+    };
+  }
+
+  // Missing renditions step down, then up. Jumping to Source is what makes a
+  // low setting hitch on a channel that does not offer that exact size.
+  function pickQualityOption(options, quality) {
+    const list = [...options];
+    if (!list.length) return null;
+    const wanted = wantedProfile(quality);
+    if (wanted.source) {
+      return (
+        list.find((option) => String(option.textContent || "").trim().toLowerCase().startsWith("source")) ||
+        list.find((option) => /source/i.test(option.textContent || "")) ||
+        null
+      );
+    }
+    const exact = list.find((option) => {
+      const profile = optionProfile(option);
+      return profile.height === wanted.height && profile.fps === wanted.fps;
+    });
+    if (exact) return exact;
+    const sameHeight = list
+      .filter((option) => optionProfile(option).height === wanted.height)
+      .sort((a, b) => optionProfile(a).fps - optionProfile(b).fps);
+    if (sameHeight.length) {
+      return sameHeight.find((option) => optionProfile(option).fps <= wanted.fps) || sameHeight[0];
+    }
+    const ranked = list
+      .map((option) => ({ option, height: optionProfile(option).height }))
+      .filter((item) => item.height > 0 && item.height < 10000 && Math.abs(item.height - wanted.height) <= 360);
+    const lower = ranked.filter((item) => item.height < wanted.height).sort((a, b) => b.height - a.height);
+    if (lower[0]) return lower[0].option;
+    const higher = ranked.filter((item) => item.height > wanted.height).sort((a, b) => a.height - b.height);
+    return higher[0]?.option || null;
   }
 
   function looking() {
@@ -225,9 +301,14 @@
     if (!video || isAdVideo(video)) return false;
     const height = video.videoHeight || 0;
     if (!height) return false;
-    if (quality === LURK_QUALITY) return height <= 200;
-    if (quality === VIEWING_QUALITY) return height > 200;
-    return false;
+    if (quality === "chunked") {
+      const stored = String(readStored("video-quality")?.default || "");
+      return stored === "chunked" || height >= 1400;
+    }
+    const match = String(quality).match(/^(\d+)p/);
+    const target = match ? Number(match[1]) : 0;
+    if (!target) return false;
+    return Math.abs(height - target) <= 80;
   }
 
   function stopQualityHunt() {
@@ -237,12 +318,11 @@
 
   // Twitch does not apply a localStorage change to a player that is already
   // decoding. Drive its own quality menu using DOM mutations rather than a
-  // timer, so this works after Chrome has throttled a hidden tab. This is
-  // symmetric: viewing selects 1080p; hiding actively selects 160p.
-  function selectPlayerQuality(quality) {
+  // timer, so this works after Chrome has throttled a hidden tab.
+  function selectPlayerQuality(quality, mode) {
     stopQualityHunt();
-    if (quality === LURK_QUALITY && looking()) return;
-    if (quality === VIEWING_QUALITY && !looking()) return;
+    if (mode === "low" && looking()) return;
+    if (mode === "view" && !looking()) return;
     // Tabbing back to a stream that is already watchable used to reopen the
     // gear every time. Only hunt when the picture is still at the wrong size.
     if (alreadyAtQuality(quality)) return;
@@ -260,11 +340,11 @@
     const advance = () => {
       // A leftover lurk hunt must not click 160p the moment the user opens
       // the quality menu themselves.
-      if (quality === LURK_QUALITY && looking()) {
+      if (mode === "low" && looking()) {
         stop();
         return;
       }
-      if (quality === VIEWING_QUALITY && !looking()) {
+      if (mode === "view" && !looking()) {
         stop();
         return;
       }
@@ -272,14 +352,7 @@
       const options = document.querySelectorAll(
         '[data-a-target="player-settings-submenu-quality-option"]'
       );
-      let wanted = [...options].find((option) => qualityOptionMatches(option, quality));
-      // Not every affiliate offers a 1080p transcode. If it is absent, Source
-      // is the closest honest interpretation of "full quality", then Auto.
-      if (!wanted && options.length && quality === VIEWING_QUALITY) {
-        wanted =
-          [...options].find((option) => /source/i.test(option.textContent || "")) ||
-          [...options].find((option) => /auto/i.test(option.textContent || ""));
-      }
+      const wanted = pickQualityOption(options, quality);
       if (wanted) {
         stopQualityHunt();
         if (!qualityOptionSelected(wanted)) {
@@ -351,7 +424,7 @@
 
     // Do not hide channel sections, unload <video> elements, or delete chat
     // nodes. Twitch unmounts that React tree and it stays gone until reload.
-    window.dispatchEvent(new CustomEvent("autolurk-quality-mode", { detail: "low" }));
+    window.dispatchEvent(new CustomEvent("autolurk-quality-mode", { detail: qualityDetail("low") }));
     writeStored("video-muted", { default: false });
     const volume = Number(localStorage.getItem("volume"));
     if (!Number.isFinite(volume) || volume <= 0) localStorage.setItem("volume", "0.5");
@@ -360,9 +433,9 @@
     // a decode thread. Nobody is looking at it, so pin it to the smallest
     // stream Twitch offers. Quality is restored when the tab is focused.
     const current = readStored("video-quality");
-    if (current?.default !== LURK_QUALITY) {
+    if (current?.default !== backgroundQuality) {
       writeStored("autolurk-prior-quality", current || { default: "auto" });
-      writeStored("video-quality", { default: LURK_QUALITY });
+      writeStored("video-quality", { default: backgroundQuality });
     }
     const video = getVideo();
     // The startup preference is enough before a player exists. Opening
@@ -370,10 +443,10 @@
     // waiting/stalled events, so runtime correction is reserved for genuine
     // quality drift. Ads are separate and their resolution is not selectable.
     // Health probes re-enter here when a hidden stream is still decoding high.
-    if (video && !isAdVideo(video) && video.videoHeight > 200) {
+    if (video && !isAdVideo(video) && !alreadyAtQuality(backgroundQuality)) {
       if (Date.now() - lastLurkQualityHuntAt >= 15_000) {
         lastLurkQualityHuntAt = Date.now();
-        selectPlayerQuality(LURK_QUALITY);
+        selectPlayerQuality(backgroundQuality, "low");
       }
     }
   }
@@ -388,17 +461,15 @@
     // script writes the user's preference back.
     window.dispatchEvent(
       new CustomEvent("autolurk-quality-mode", {
-        detail: allowHidden ? "high" : "view",
+        detail: qualityDetail(allowHidden ? "high" : "view"),
       })
     );
     restoreAudioForViewing();
-    // Already decoding a watchable rendition (including one the user picked).
-    // Driving the gear again is what left the settings menu stuck open.
-    if (alreadyAtQuality(VIEWING_QUALITY)) return;
-    // Auto is the safe persisted fallback while Twitch renders the menu; the
-    // mutation-driven selector then chooses 1080p exactly when it is offered.
-    writeStored("video-quality", { default: "auto" });
-    selectPlayerQuality(VIEWING_QUALITY);
+    // Already decoding the rendition the user asked for. Driving the gear
+    // again is what left the settings menu stuck open.
+    if (alreadyAtQuality(watchingQuality)) return;
+    writeStored("video-quality", { default: watchingQuality });
+    selectPlayerQuality(watchingQuality, allowHidden ? "high" : "view");
   }
 
   function restoreQualityForViewing() {
@@ -711,6 +782,7 @@
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "MANAGED_NOW") {
+      useQualityMessage(message);
       becomeManaged();
       sendResponse({ ok: true });
       return false;
@@ -725,6 +797,7 @@
     // The background asks for state directly because a hidden tab cannot be
     // trusted to report on its own schedule. Answering is immediate.
     if (message?.type === "PROBE_PLAYER") {
+      useQualityMessage(message);
       becomeManaged();
       // The service worker is the only clock a hidden tab can trust.
       if (!looking() && !keepHighQualityWhileHidden) applyLurkPreferences();
@@ -733,6 +806,7 @@
     }
 
     if (message?.type === "PIN_LOW_QUALITY") {
+      useQualityMessage(message);
       becomeManaged();
       keepHighQualityWhileHidden = false;
       applyLurkPreferences();
@@ -741,6 +815,7 @@
     }
 
     if (message?.type === "PIN_VIEWING_QUALITY") {
+      useQualityMessage(message);
       becomeManaged();
       keepHighQualityWhileHidden = false;
       restoreQualityForViewing();
@@ -749,6 +824,7 @@
     }
 
     if (message?.type === "PIN_HIGH_QUALITY") {
+      useQualityMessage(message);
       keepHighQualityWhileHidden = true;
       becomeManaged();
       restoreHighQuality(true);
@@ -784,8 +860,8 @@
     if (managedTab) return;
     managedTab = true;
     // Covers a tab adopted after the fact, which never carried the hash. Match
-    // what the user can see: 1080p while this tab is in front, 160p only once
-    // it is actually in the background.
+    // what the user can see: the watching quality while this tab is in front,
+    // the background quality only once it is actually in the background.
     if (looking()) restoreQualityForViewing();
     else applyLurkPreferences();
     const video = getVideo();

@@ -223,7 +223,14 @@ describe("merging preferences between computers", () => {
   });
 
   it("strips machine-specific fields before publishing", () => {
-    const stripped = stripUnsynced({ clientId: "x", publishedApp: true, syncGroup: "house", muteTabs: false });
+    const stripped = stripUnsynced({
+      clientId: "x",
+      publishedApp: true,
+      syncGroup: "house",
+      backgroundQuality: "360p30",
+      watchingQuality: "480p30",
+      muteTabs: false,
+    });
     assert.deepEqual(stripped, { muteTabs: false });
   });
 

@@ -1,4 +1,4 @@
-import { RESERVED_TWITCH_PATHS } from "./constants.js";
+import { RESERVED_TWITCH_PATHS, streamQuality } from "./constants.js";
 
 export function now() {
   return Date.now();
@@ -127,8 +127,10 @@ export function twitchChannelUrl(login) {
 // later reload, which is useless for a tab that is opened and never touched.
 export const LURK_HASH = "#autolurk";
 
-export function managedChannelUrl(login) {
-  return `${twitchChannelUrl(login)}${LURK_HASH}`;
+export function managedChannelUrl(login, settings) {
+  const background = streamQuality(settings?.backgroundQuality, "160p30");
+  const watching = streamQuality(settings?.watchingQuality, "1080p60");
+  return `${twitchChannelUrl(login)}${LURK_HASH}&b=${encodeURIComponent(background)}&w=${encodeURIComponent(watching)}`;
 }
 
 export function twitchProfileUrl(login) {

@@ -253,6 +253,28 @@ describe("static wiring", () => {
   // background anything, so the marker is duplicated into the content script.
   // If the two drift, the grid either never builds or eats an ordinary Twitch
   // page, and only one of those is obvious.
+  it("keeps stream quality ids in step with the settings", async () => {
+    const { STREAM_QUALITIES } = await import("../shared/constants.js");
+    const ids = STREAM_QUALITIES.map((item) => item.id);
+    for (const path of ["content/twitch-player.js", "content/twitch-quality.js"]) {
+      const source = await read(path);
+      const literal = source.match(/const STREAM_QUALITY_IDS = \[([\s\S]*?)\]/);
+      assert.ok(literal, `${path} is missing the quality list`);
+      const found = literal[1]
+        .split(",")
+        .map((part) => part.trim().replace(/^["']|["']$/g, ""))
+        .filter(Boolean);
+      assert.deepEqual(found, ids, path);
+    }
+    const html = await read("dashboard/dashboard.html");
+    for (const id of ["backgroundQuality", "watchingQuality"]) {
+      const block = html.match(new RegExp(`<select id="${id}">([\\s\\S]*?)</select>`));
+      assert.ok(block, `${id} is missing from settings`);
+      const values = [...block[1].matchAll(/value="([^"]+)"/g)].map((match) => match[1]);
+      assert.deepEqual(values, ids, id);
+    }
+  });
+
   it("keeps the grid marker in step with the shared constant", async () => {
     const { MULTISTREAM } = await import("../shared/constants.js");
     const source = await read("content/twitch-grid.js");
