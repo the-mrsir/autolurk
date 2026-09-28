@@ -5,7 +5,7 @@
 
 import { MESSAGE, SESSION_KEYS } from "../shared/constants.js";
 import { nextServerTarget, serverReportWorking } from "../shared/server-logic.js";
-import { getManagedTabs, getMeta, getSessionValue, getSettings, mutateSessionValue } from "../shared/storage.js";
+import { getManagedTabs, getSessionValue, getSettings, mutateSessionValue } from "../shared/storage.js";
 import { managedChannelUrl } from "../shared/utilities.js";
 import { logActivity } from "./activity.js";
 import { ensureTabMuted, handlePlayerHealth } from "./stream-boot.js";
@@ -32,18 +32,35 @@ async function probe(tabId) {
 }
 
 async function confirmPlaying(tabId, timeoutMs) {
-  const started = Date.now();
-  const deadline = started + timeoutMs;
+  const deadline = Date.now() + timeoutMs;
   let last = null;
   do {
     last = await probe(tabId);
     if (last) await handlePlayerHealth(tabId, last);
     if (serverReportWorking(last)) return last;
-    if (last?.hidden === true && Date.now() - started > 3000) return last;
     if (Date.now() >= deadline) break;
     await sleep(Math.min(1000, Math.max(0, deadline - Date.now())));
   } while (Date.now() < deadline);
   return last;
+}
+
+// A collapsed AutoLurk group keeps the selected tab hidden. Focusing it does
+// not open the stream, the probe stays hidden, and the rotation gives up.
+async function expandGroup(tabId) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(Number(tabId));
+  } catch {
+    return;
+  }
+  const none = chrome.tabGroups?.TAB_GROUP_ID_NONE ?? -1;
+  if (tab.groupId == null || tab.groupId === none) return;
+  try {
+    await chrome.tabGroups.update(tab.groupId, { collapsed: false });
+  } catch {
+    // The tab is still activated below. A group that will not expand is logged
+    // as "could not be shown" if the page stays hidden.
+  }
 }
 
 async function reloadInFront(entry) {
@@ -56,12 +73,29 @@ async function reloadInFront(entry) {
   await ensureTabMuted(tabId);
 }
 
+const ROTATE_GAP_MS = 100_000;
+
+// The two-minute alarm and the one-minute health check both call this. The
+// session stamp keeps them from opening two streams at once.
+export async function rotateServerStreamsIfDue() {
+  const settings = await getSettings();
+  if (!settings.serverRotation || settings.automationEnabled === false) return null;
+  const now = Date.now();
+  let due = false;
+  await mutateSessionValue(SESSION_KEYS.SERVER, {}, (current) => {
+    if (Number(current.lastRotatedAt) && now - Number(current.lastRotatedAt) < ROTATE_GAP_MS) {
+      return undefined;
+    }
+    due = true;
+    return { ...current, lastRotatedAt: now };
+  });
+  if (!due) return null;
+  return rotateServerStreams();
+}
+
 export async function rotateServerStreams(options = {}) {
   const settings = await getSettings();
   if (!settings.serverRotation || settings.automationEnabled === false) return null;
-
-  const meta = await getMeta();
-  if (meta.wakeRecheckPending) return null;
 
   const managed = await getManagedTabs();
   const entries = Object.values(managed);
@@ -69,9 +103,14 @@ export async function rotateServerStreams(options = {}) {
   const target = nextServerTarget(entries, session.lastTabId);
   if (!target) return null;
 
-  await mutateSessionValue(SESSION_KEYS.SERVER, {}, () => ({ lastTabId: Number(target.tabId) }));
+  await mutateSessionValue(SESSION_KEYS.SERVER, {}, (current) => ({
+    ...current,
+    lastTabId: Number(target.tabId),
+    lastRotatedAt: Date.now(),
+  }));
 
   const name = target.displayName || target.expectedChannel || target.login;
+  await expandGroup(target.tabId);
   await focusTab(target.tabId);
   let report = await confirmPlaying(target.tabId, options.confirmMs ?? CONFIRM_MS);
   if (serverReportWorking(report)) {

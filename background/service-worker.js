@@ -45,7 +45,7 @@ import {
 import { NOTIFICATION_BUTTONS } from "./notifications.js";
 import { runMigrations } from "./migrations.js";
 import { recordSevenTvExtension } from "./seventv.js";
-import { rotateServerStreams } from "./server-rotation.js";
+import { rotateServerStreams, rotateServerStreamsIfDue } from "./server-rotation.js";
 import { noteStreakTabClosed, scanWatchStreaks, stopWatchStreaks, tickWatchStreaks } from "./streaks.js";
 import { checkForUpdate } from "./updates.js";
 import {
@@ -282,6 +282,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         // opposite of an ordinary health check: find out what is still live
         // before touching any tab.
         await handleHealthTick();
+        await rotateServerStreamsIfDue().catch((error) =>
+          console.warn("Server rotation failed", error)
+        );
         // The session outlives the worker but nothing else does, so this is
         // where a restart finds out whether the grid tab is still there.
         await reconcileMultistream().catch((error) =>
@@ -297,7 +300,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await checkForUpdate().catch((error) => console.warn("Update check failed", error));
         return;
       case ALARMS.SERVER_ROTATE:
-        await rotateServerStreams().catch((error) => console.warn("Server rotation failed", error));
+        await rotateServerStreamsIfDue().catch((error) => console.warn("Server rotation failed", error));
         await buildSnapshot();
         return;
       case ALARMS.SYNC_FOLLOWS:
@@ -456,6 +459,11 @@ async function handleMessage(message, sender) {
       }
       // The check interval lives in the alarm period, so rebuild the schedule.
       await scheduleAlarms({ reset: true });
+      if (!previous.serverRotation && settings.serverRotation) {
+        // The standing alarm waits two minutes. Open the first stream before
+        // this handler returns, or Chrome stops the worker and nothing moves.
+        await rotateServerStreams().catch((error) => console.warn("Server rotation failed", error));
+      }
       if (
         previous.backgroundQuality !== settings.backgroundQuality ||
         previous.watchingQuality !== settings.watchingQuality

@@ -4,7 +4,7 @@ import { chromeMock } from "./chrome-mock.js";
 const mock = chromeMock();
 
 const { nextServerTarget, serverReportWorking } = await import("../shared/server-logic.js");
-const { rotateServerStreams } = await import("../background/server-rotation.js");
+const { rotateServerStreams, rotateServerStreamsIfDue } = await import("../background/server-rotation.js");
 
 function entry(tabId, login) {
   return {
@@ -90,16 +90,42 @@ describe("opening the next stream", () => {
     assert.equal((await mock.chrome.tabs.get(2)).active, false);
   });
 
-  it("waits out a wake recheck", async () => {
+  it("expands a collapsed group so the stream is on screen", async () => {
     mock.reset({
       tabs: [tab(2, "alpha")],
       storage: {
-        settings: { serverRotation: true, automationEnabled: true },
+        settings: { serverRotation: true, automationEnabled: true, muteTabs: true },
         managedTabs: { 2: entry(2, "alpha") },
-        meta: { wakeRecheckPending: true },
       },
     });
-    assert.equal(await rotateServerStreams(fast), null);
+    install({
+      2: [{ playing: true, currentTime: 4, hasVideo: true, hidden: false }],
+    });
+    const groupId = await mock.chrome.tabs.group({ tabIds: [2] });
+    await mock.chrome.tabGroups.update(groupId, { collapsed: true });
+    const result = await rotateServerStreams(fast);
+    assert.equal(result.playing, true);
+    assert.equal((await mock.chrome.tabGroups.get(groupId)).collapsed, false);
+    assert.equal((await mock.chrome.tabs.get(2)).active, true);
+  });
+
+  it("does not open a second stream in the same two minutes", async () => {
+    mock.reset({
+      tabs: [tab(2, "alpha"), tab(5, "beta")],
+      storage: {
+        settings: { serverRotation: true, automationEnabled: true, muteTabs: true },
+        managedTabs: { 2: entry(2, "alpha"), 5: entry(5, "beta") },
+      },
+    });
+    install({
+      2: [{ playing: true, currentTime: 4, hasVideo: true, hidden: false }],
+      5: [{ playing: true, currentTime: 4, hasVideo: true, hidden: false }],
+    });
+    const first = await rotateServerStreamsIfDue(fast);
+    const second = await rotateServerStreamsIfDue(fast);
+    assert.equal(first.tabId, 2);
+    assert.equal(second, null);
+    assert.equal((await mock.chrome.tabs.get(5)).active, false);
   });
 
   it("brings the next stream forward when it is already playing", async () => {
