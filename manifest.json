@@ -1,0 +1,69 @@
+{
+  "manifest_version": 3,
+  "name": "AutoLurk Companion",
+  "version": "1.2.6",
+  "description": "Follow monitoring, favorite auto-open, muted managed Twitch tabs, and raid-aware cleanup.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5xf2r5ndJ8O83Pl06fZVv6mjlsfFNK7myZT6OdYI0i7QfdnE8ucNBQqOBz0SdyNsy0Dq2OK60g+gDVcpLCsgNs5erTeFeybSTi7EvlsG2IwUHh+/aj7b47uOEG1V6g6d1UcBKqFwqN3s1WCLa6ElC14GtkObhhE25jBv3HBiBE8Aoz9zhp44uPfxBoqkwecxp8w7B/TF6GlZ1Xsppf6NtXeiQu/hT1V7xqLriTLMTkYlTrgWFrL24bzH7Uy9DpKt/6kXuV7zX6jCOyLqOPI4pMttT8PaQIOfln94LdO7311Nd9b6Y86DnsIqWe0XLNU+mrSvU/6eNzHCSAtELjTkuwIDAQAB",
+  "action": {
+    "default_title": "AutoLurk Companion",
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "options_page": "dashboard/dashboard.html",
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "storage",
+    "alarms",
+    "notifications"
+  ],
+  "host_permissions": [
+    "https://id.twitch.tv/*",
+    "https://api.twitch.tv/*",
+    "https://www.twitch.tv/*",
+    "https://player.twitch.tv/*",
+    "https://7tv.io/*"
+  ],
+  "optional_host_permissions": ["https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.twitch.tv/*"],
+      "js": ["content/twitch-quality.js", "content/twitch-keepalive.js", "content/twitch-streak-gql.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://www.twitch.tv/*"],
+      "js": [
+        "content/twitch-common.js",
+        "content/twitch-grid.js",
+        "content/twitch-navigation.js",
+        "content/twitch-player.js",
+        "content/twitch-points.js",
+        "content/twitch-streak.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://player.twitch.tv/*"],
+      "js": ["content/twitch-embed.js"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AutoLurk</title>
+    <link rel="stylesheet" href="dashboard.css" />
+  </head>
+  <body>
+    <aside class="sidebar">
+      <div class="brand">
+        <img src="../icons/icon32.png" alt="" width="22" height="22" />
+        <div>
+          <strong>AutoLurk</strong>
+          <span id="sidebarUser">Not connected</span>
+        </div>
+      </div>
+      <p id="sidebarCounts" class="counts">0 live · 0 managed</p>
+      <nav>
+        <button class="nav-btn active" data-view="live" type="button">Live</button>
+        <button class="nav-btn" data-view="following" type="button">Following</button>
+        <button class="nav-btn" data-view="activity" type="button">Activity</button>
+        <button class="nav-btn" data-view="settings" type="button">Settings</button>
+      </nav>
+      <div class="sidebar-foot">
+        <button id="pauseBtn" type="button">Pause AutoLurk</button>
+        <button id="refreshFollowsBtn" type="button">Refresh</button>
+      </div>
+    </aside>
+
+    <main>
+      <div id="banners" class="banners"></div>
+
+      <header class="page-head">
+        <h1 id="pageTitle">Live</h1>
+        <p id="pageMeta" class="meta"></p>
+        <div id="streamerToolbar" class="toolbar">
+          <input id="searchInput" type="search" placeholder="Search channels" />
+          <div id="followFilters" class="filters hidden">
+            <button type="button" class="filter on" data-filter="all">All</button>
+            <button type="button" class="filter" data-filter="favorites">Favorites</button>
+            <button type="button" class="filter" data-filter="live">Live</button>
+            <button type="button" class="filter" data-filter="offline">Offline</button>
+          </div>
+          <select id="sortSelect">
+            <option value="live">Live first</option>
+            <option value="viewers">Viewers</option>
+            <option value="priority">Priority</option>
+            <option value="alpha">A–Z</option>
+          </select>
+        </div>
+      </header>
+
+      <section id="setupView" class="panel hidden">
+        <h2>Connect Twitch</h2>
+        <p id="setupLead" class="meta">Authorize this browser. Follows import after that.</p>
+        <div id="publisherSetup">
+          <p class="meta">Put the public Client ID in <code>shared/constants.js</code>, or paste it here to test.</p>
+          <div class="inline">
+            <input id="clientIdInput" type="text" autocomplete="off" placeholder="Client ID" />
+            <button id="saveClientIdBtn" type="button">Save</button>
+            <button id="connectBtn" class="primary" type="button">Connect Twitch</button>
+          </div>
+        </div>
+        <div id="publicConnectRow" class="hidden">
+          <button id="publicConnectBtn" class="primary" type="button">Connect Twitch</button>
+        </div>
+        <div id="deviceBox" class="hidden">
+          <p class="meta">Enter this code on Twitch</p>
+          <div id="userCode" class="code"></div>
+          <div class="inline">
+            <a id="activateLink" class="primary link-btn" target="_blank" rel="noreferrer">Open Activate</a>
+            <button id="cancelConnectBtn" type="button">Cancel</button>
+          </div>
+        </div>
+        <p id="setupStatus" class="meta"></p>
+      </section>
+
+      <section id="multistreamBar" class="multistream hidden">
+        <div class="ms-head">
+          <strong>Multistream</strong>
+          <span id="multistreamHint" class="meta"></span>
+          <span id="multistreamCount" class="count"></span>
+        </div>
+        <div id="multistreamPicker" class="ms-picker"></div>
+        <p id="multistreamEmpty" class="meta hidden">No live channels to watch together right now.</p>
+        <div class="inline">
+          <button id="multistreamStartBtn" class="primary" type="button">Start multistream</button>
+          <button id="multistreamFocusBtn" class="hidden" type="button">Go to the grid</button>
+          <button id="multistreamExitBtn" class="danger hidden" type="button">Exit multistream</button>
+          <span id="multistreamStatus" class="meta"></span>
+        </div>
+      </section>
+
+      <section id="liveView" class="panel hidden">
+        <section class="block">
+          <h2>Starred <span id="liveFavCount" class="count"></span></h2>
+          <div id="liveFavorites" class="rows"></div>
+          <p id="emptyLiveFavorites" class="empty hidden">No starred channels are live.</p>
+        </section>
+        <section class="block">
+          <h2>Other live <span id="otherLiveCount" class="count"></span></h2>
+          <div id="otherLive" class="rows"></div>
+          <p id="emptyOtherLive" class="empty hidden">No other followed channels are live.</p>
+        </section>
+      </section>
+
+      <section id="followingView" class="panel hidden">
+        <div class="inline">
+          <input id="addChannelInput" type="text" placeholder="Add username" />
+          <button id="addChannelBtn" type="button">Add & favorite</button>
+        </div>
+        <section id="followLiveBlock" class="block">
+          <h2>Live now <span id="followLiveCount" class="count"></span></h2>
+          <div id="followLiveStarredBlock" class="subblock">
+            <h3>Starred <span id="followLiveStarredCount" class="count"></span></h3>
+            <div id="followLiveStarred" class="follow-grid"></div>
+          </div>
+          <div id="followLiveOtherBlock" class="subblock">
+            <h3>Other live <span id="followLiveOtherCount" class="count"></span></h3>
+            <div id="followLiveOther" class="follow-grid"></div>
+          </div>
+        </section>
+        <section id="followStarredBlock" class="block">
+          <h2>Starred <span id="followStarredCount" class="count"></span></h2>
+          <div id="followStarred" class="follow-grid"></div>
+        </section>
+        <section id="followRestBlock" class="block">
+          <h2>Following <span id="followRestCount" class="count"></span></h2>
+          <div id="followRest" class="follow-grid"></div>
+        </section>
+        <p id="emptyFollows" class="empty hidden">No channels match.</p>
+      </section>
+
+      <section id="activityView" class="panel hidden">
+        <div id="activityList" class="activity"></div>
+        <p id="emptyActivity" class="empty hidden">Nothing logged yet.</p>
+      </section>
+
+      <section id="settingsView" class="panel hidden">
+        <section class="set-block">
+          <h2>Streams</h2>
+          <label class="set-row"><span>Run AutoLurk</span><input id="automationEnabled" type="checkbox" /></label>
+          <label class="set-row"><span>Open favorites automatically</span><input id="autoOpenFavorites" type="checkbox" /></label>
+          <label class="set-row"><span>Close streams when they go offline</span><input id="autoCloseOffline" type="checkbox" /></label>
+          <label class="set-row"><span>Close the tab when a raid redirects it</span><input id="closeRaids" type="checkbox" /></label>
+          <label class="set-row"><span>Mute Chrome tabs</span><input id="muteTabs" type="checkbox" /></label>
+          <label class="set-row"><span>Reopen if I close a live stream</span><input id="reopenIfManuallyClosed" type="checkbox" /></label>
+          <label class="set-row">
+            <span>Check interval</span>
+            <select id="checkIntervalSeconds">
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+            </select>
+          </label>
+          <label class="set-row">
+            <span>Maximum open streams (0 = no limit)</span>
+            <input id="maxAutoOpenStreams" type="number" min="0" max="20" />
+          </label>
+          <label class="set-row">
+            <span>Offline close delay (sec)</span>
+            <input id="offlineGraceSeconds" type="number" min="15" max="180" />
+          </label>
+        </section>
+
+        <section class="set-block">
+          <h2>Tab group</h2>
+          <label class="set-row"><span>Group managed streams</span><input id="groupTabs" type="checkbox" /></label>
+          <label class="set-row"><span>Collapse group automatically</span><input id="collapseGroup" type="checkbox" /></label>
+          <label class="set-row">
+            <span>Group color</span>
+            <select id="groupColor">
+              <option value="purple">Purple</option>
+              <option value="blue">Blue</option>
+              <option value="cyan">Cyan</option>
+              <option value="green">Green</option>
+              <option value="yellow">Yellow</option>
+              <option value="orange">Orange</option>
+              <option value="red">Red</option>
+              <option value="pink">Pink</option>
+              <option value="grey">Grey</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="set-block">
+          <h2>Notifications</h2>
+          <p class="meta">Applies to every starred channel. Override per channel under Rules.</p>
+          <label class="set-row"><span>Favorite goes live</span><input id="notifyLive" type="checkbox" /></label>
+          <label class="set-row"><span>Category changes</span><input id="notifyGameChange" type="checkbox" /></label>
+          <label class="set-row"><span>Title changes</span><input id="notifyTitleChange" type="checkbox" /></label>
+          <label class="set-row">
+            <span>Skip the popup when AutoLurk opens the stream</span>
+            <input id="notifyOnlyWhenNotOpened" type="checkbox" />
+          </label>
+        </section>
+
+        <section class="set-block">
+          <h2>Channel points</h2>
+          <p class="meta">
+            AutoLurk clicks the bonus chest in Twitch's channel points widget. It never
+            spends points. Because Twitch rounds the displayed balance past a thousand,
+            a claim is counted only when the chest disappears, not from the number.
+          </p>
+          <label class="set-row"><span>Claim bonus chests</span><input id="claimChannelPoints" type="checkbox" /></label>
+          <label class="set-row">
+            <span>Only on tabs AutoLurk opened</span>
+            <input id="claimOnManagedTabsOnly" type="checkbox" />
+          </label>
+          <label class="set-row">
+            <span>Recover expiring watch streaks</span>
+            <input id="saveWatchStreaks" type="checkbox" />
+          </label>
+          <label class="set-row">
+            <span>Open recovery videos in front</span>
+            <input id="streakOpenInFront" type="checkbox" />
+          </label>
+          <p class="meta">
+            When a favorite's watch streak is expiring, AutoLurk opens that channel's
+            recovery clip or VOD. Bringing it to the front is what lets the video
+            actually start; favorite streams still open in the background. The recovery
+            tab closes once Twitch's own streak query no longer shows an expiration.
+          </p>
+          <p id="pointsSummary" class="meta"></p>
+        </section>
+
+        <section class="set-block">
+          <h2>7TV</h2>
+          <p class="meta">
+            Looks up each live favorite's 7TV emote set and shows it under Details.
+            Results are cached for six hours, so this is a couple of requests an hour.
+          </p>
+          <label class="set-row"><span>Look up 7TV emotes</span><input id="sevenTvEnabled" type="checkbox" /></label>
+        </section>
+
+        <section class="set-block">
+          <h2>Your other computers</h2>
+          <p class="meta">
+            Favorites, their per-channel options, and these settings are shared only
+            with computers that use the same sync name and the same Chrome profile.
+            A different name keeps a separate set. Your Twitch login is never shared
+            — connect Twitch separately on each machine. Which streams are open stays
+            on this computer.
+          </p>
+          <label class="set-row">
+            <span>Sync favorites and settings</span>
+            <input id="syncEnabled" type="checkbox" />
+          </label>
+          <label class="set-row">
+            <span>Sync name</span>
+            <input id="syncGroup" type="text" maxlength="80" spellcheck="false" autocomplete="off" placeholder="A name only your computers share" />
+          </label>
+          <p id="syncSummary" class="meta"></p>
+          <p class="meta">
+            Both computers must show the same extension ID below. Chrome keys synced
+            data to this ID, so if they differ, neither machine can see the other.
+          </p>
+          <p class="meta"><strong>Extension ID:</strong> <code id="syncExtensionId"></code></p>
+          <div class="inline">
+            <button id="syncNowBtn" type="button">Sync now</button>
+            <button id="exportBtn" type="button">Export backup</button>
+            <button id="importBtn" type="button">Import backup</button>
+            <input id="importFile" type="file" accept="application/json,.json" hidden />
+          </div>
+          <p id="syncResult" class="meta"></p>
+        </section>
+
+        <section class="set-block">
+          <h2>Updates</h2>
+          <p class="meta">
+            Chrome does not update an extension loaded from a folder. Paste a public GitHub
+            repository that has this extension at the top, with <code>manifest.json</code> in
+            the root. Check reads that file. When its version is higher, Update downloads the
+            repository into this folder and reloads AutoLurk. The first Check lets Chrome
+            reach GitHub. The first Update asks for the folder you loaded on chrome://extensions.
+          </p>
+          <p class="meta">
+            To publish an update, raise the version in <code>manifest.json</code> and push.
+            A JSON address with <code>version</code> and <code>packageUrl</code> still works too.
+          </p>
+          <label class="set-row">
+            <span>GitHub repository</span>
+            <input id="updateManifestUrl" type="url" placeholder="https://github.com/you/autolurk" autocomplete="off" />
+          </label>
+          <p id="updateStatus" class="meta">Not checked yet.</p>
+          <div class="inline">
+            <button id="checkUpdateBtn" type="button">Check for updates</button>
+            <button id="applyUpdateBtn" class="primary hidden" type="button">Update</button>
+          </div>
+        </section>
+
+        <section class="set-block">
+          <h2>Other</h2>
+          <div class="inline">
+            <button id="openDropsBtn" type="button">Open Drops inventory</button>
+          </div>
+        </section>
+
+        <section class="set-block">
+          <h2>Account</h2>
+          <label id="settingsClientRow" class="set-row">
+            <span>Twitch Client ID</span>
+            <input id="settingsClientId" type="text" autocomplete="off" />
+          </label>
+          <p id="publishedClientNote" class="meta hidden">Using the shared Twitch app.</p>
+          <div class="inline">
+            <button id="disconnectBtn" class="danger" type="button">Disconnect Twitch</button>
+          </div>
+        </section>
+
+        <div class="inline">
+          <button id="saveSettingsBtn" class="primary" type="button">Save settings</button>
+          <p id="settingsSaveStatus" class="meta"></p>
+        </div>
+        <p id="syncMeta" class="meta"></p>
+      </section>
+    </main>
+
+    <script type="module" src="dashboard.js"></script>
+  </body>
+</html>

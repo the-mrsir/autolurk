@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AutoLurk</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <strong>AutoLurk</strong>
+        <p id="statusLine">Checking…</p>
+      </div>
+      <span id="runState">—</span>
+    </header>
+
+    <section id="setupCard" class="hidden">
+      <p>Connect Twitch from the dashboard.</p>
+      <button id="openDashboardBtn" class="primary" type="button">Open dashboard</button>
+    </section>
+
+    <section id="authCard" class="hidden">
+      <p>Enter this code on Twitch</p>
+      <div id="userCode" class="code"></div>
+      <button id="cancelAuthBtn" type="button">Cancel</button>
+    </section>
+
+    <p id="summary" class="summary"></p>
+    <div id="liveList"></div>
+    <p id="emptyLive" class="empty hidden">No favorites are live.</p>
+
+    <footer>
+      <button id="updateBtn" class="primary hidden" type="button">Update</button>
+      <button id="dashboardBtn" class="primary" type="button">Open dashboard</button>
+      <button id="pauseBtn" type="button">Pause</button>
+    </footer>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

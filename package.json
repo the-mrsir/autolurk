@@ -1,0 +1,10 @@
+{
+  "name": "autolurk-companion",
+  "version": "1.2.6",
+  "private": true,
+  "description": "Manifest V3 Chrome extension for Twitch follow monitoring and managed stream tabs.",
+  "type": "module",
+  "scripts": {
+    "test": "node tests/run.js"
+  }
+}

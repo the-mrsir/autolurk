@@ -1,0 +1,55 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AutoLurk tests</title>
+    <style>
+      body { background: #111214; color: #ececec; font: 13px/1.5 Consolas, monospace; padding: 20px; }
+      pre { white-space: pre-wrap; margin: 0; }
+      .fail { color: #e91916; }
+      .pass { color: #53c28a; }
+    </style>
+  </head>
+  <body>
+    <!--
+      Runs the same suites as `node tests/run.js`, for machines without Node.
+      Serve the project over http (module scripts do not load from file://):
+        python -m http.server 8000
+      then open http://localhost:8000/tests/runner.html
+    -->
+    <h1>AutoLurk tests</h1>
+    <pre id="output">Running…</pre>
+
+    <script type="module">
+      import { chromeMock } from "./chrome-mock.js";
+      import { runAll } from "./harness.js";
+
+      const output = document.getElementById("output");
+
+      chromeMock();
+
+      try {
+        await import("./poll-logic.test.js");
+        await import("./health.test.js");
+        await import("./storage.test.js");
+        await import("./background.test.js");
+        await import("./features.test.js");
+        await import("./throttling.test.js");
+        await import("./static.test.js");
+        // Last: importing the service worker installs listeners for good.
+        await import("./service-worker.test.js");
+      } catch (error) {
+        output.textContent = `Failed to load suites:\n${error.stack || error}`;
+        output.className = "fail";
+        throw error;
+      }
+
+      const lines = [];
+      const { failures } = await runAll({ log: (line) => lines.push(line) });
+
+      output.textContent = lines.join("\n");
+      output.className = failures.length ? "fail" : "pass";
+    </script>
+  </body>
+</html>
