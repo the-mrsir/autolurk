@@ -993,9 +993,24 @@ function watchDeviceFlow(flow) {
   }, 3000);
 }
 
+function revealUpdates() {
+  if (location.hash !== "#updates") return;
+  setView("settings");
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      const button = $("applyUpdateBtn");
+      const target = button && !button.classList.contains("hidden") ? button : $("updates");
+      target?.scrollIntoView({ block: "center" });
+    });
+  });
+}
+
+window.addEventListener("hashchange", revealUpdates);
+
 refresh()
   .then(() => {
     if (location.hash === "#settings") setView("settings");
+    revealUpdates();
   })
   .catch((error) => {
     $("setupStatus").textContent = error.message;

@@ -95,8 +95,9 @@ function tabLoaded(tabId) {
   });
 }
 
-// Runs on a normal web page. Extension pages are not given the folder picker.
-function chooseFolderAndWrite(entries, expected) {
+// Runs on a normal web page. The folder handle has to stay here; extension
+// pages are not given the picker, and a handle cannot be sent back.
+function chooseFolder(expected) {
   const root = document.createElement("div");
   root.id = "autolurk-update";
   root.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#16171d;color:#f2f2f2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font:16px/1.4 Segoe UI,sans-serif;text-align:center;padding:24px;";
@@ -107,12 +108,14 @@ function chooseFolderAndWrite(entries, expected) {
   button.textContent = "Choose AutoLurk folder";
   button.style.cssText = "font:inherit;padding:10px 16px;cursor:pointer;";
   const status = document.createElement("p");
+  status.id = "autolurk-update-status";
   root.append(title, button, status);
   document.documentElement.append(root);
 
   button.addEventListener("click", async () => {
     button.disabled = true;
     status.textContent = "Waiting for the folder…";
+    delete status.dataset.autolurkError;
     try {
       const picker = globalThis.showDirectoryPicker;
       if (typeof picker !== "function") throw new Error("This page cannot choose a folder.");
@@ -126,59 +129,128 @@ function chooseFolderAndWrite(entries, expected) {
       if (manifest.name !== expected.name || (expected.key && manifest.key !== expected.key)) {
         throw new Error("That folder is a different extension. Choose the AutoLurk folder.");
       }
-      for (const [path, data] of entries) {
-        const parts = String(path).split("/");
-        let current = dir;
-        for (let index = 0; index < parts.length - 1; index += 1) {
-          current = await current.getDirectoryHandle(parts[index], { create: true });
-        }
-        const handle = await current.getFileHandle(parts[parts.length - 1], { create: true });
-        const writable = await handle.createWritable();
-        await writable.write(new Uint8Array(data));
-        await writable.close();
-      }
-      status.dataset.autolurkVersion = expected.version;
-      status.textContent = `Version ${expected.version} is in place. Returning to AutoLurk…`;
+      globalThis.__autolurkDir = dir;
+      status.dataset.autolurkPicked = "1";
+      status.textContent = `Writing version ${expected.version}…`;
     } catch (error) {
       button.disabled = false;
-      status.textContent = error?.name === "AbortError" ? "Choose the AutoLurk folder to continue." : error.message;
+      if (error?.name === "AbortError") {
+        status.textContent = "Choose the AutoLurk folder to continue.";
+        return;
+      }
+      status.dataset.autolurkError = error.message || "The folder could not be opened.";
+      status.textContent = status.dataset.autolurkError;
     }
   });
 }
 
-function readInstalledVersion() {
-  return document.querySelector("#autolurk-update [data-autolurk-version]")?.dataset.autolurkVersion || "";
+function readUpdateState() {
+  const status = document.querySelector("#autolurk-update-status");
+  return {
+    picked: status?.dataset.autolurkPicked || "",
+    error: status?.dataset.autolurkError || "",
+  };
+}
+
+async function writeChosenFile(path, data) {
+  const dir = globalThis.__autolurkDir;
+  if (!dir) throw new Error("The folder picker was closed.");
+  const parts = String(path).split("/");
+  let current = dir;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    current = await current.getDirectoryHandle(parts[index], { create: true });
+  }
+  const handle = await current.getFileHandle(parts[parts.length - 1], { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(new Uint8Array(data));
+  await writable.close();
+}
+
+async function sendWhenReady(tabId, message) {
+  let last = "The Twitch tab did not load the updater.";
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      return await chrome.tabs.sendMessage(tabId, message);
+    } catch (error) {
+      last = error?.message || last;
+      if (!/Receiving end does not exist|Could not establish connection/i.test(last)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+  }
+  throw new Error(last);
+}
+
+// Used when this Chrome has not been reloaded since scripting was added.
+// The content script from that load can still open the folder picker.
+async function installViaContentScript(files, expected) {
+  const tab = await chrome.tabs.create({ url: "https://www.twitch.tv/", active: true });
+  await tabLoaded(tab.id);
+  const response = await sendWhenReady(tab.id, {
+    type: "APPLY_UPDATE_FILES",
+    entries: [...files].map(([path, bytes]) => [path, Array.from(bytes)]),
+    expected,
+  });
+  if (!response?.ok) throw new Error(response?.error || "The update was not written.");
+  await chrome.tabs.remove(tab.id);
+  return response.version;
+}
+
+async function pageState(tabId) {
+  let result;
+  try {
+    [result] = await chrome.scripting.executeScript({
+      target: { tabId },
+      world: "MAIN",
+      func: readUpdateState,
+    });
+  } catch {
+    throw new Error("The folder page was closed before the update finished.");
+  }
+  return result?.result || { picked: "", error: "" };
 }
 
 async function installViaPage(files, expected) {
-  const tab = await chrome.tabs.create({ url: "https://example.com/", active: true });
+  // www.twitch.tv is already a host permission. A new origin cannot be
+  // requested unless that exact pattern is listed in the manifest.
+  const tab = await chrome.tabs.create({ url: "https://www.twitch.tv/", active: true });
   await tabLoaded(tab.id);
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
     world: "MAIN",
-    func: chooseFolderAndWrite,
-    args: [[...files].map(([path, bytes]) => [path, Array.from(bytes)]), expected],
+    func: chooseFolder,
+    args: [expected],
   });
 
   const started = Date.now();
+  let picked = false;
   while (Date.now() - started < 5 * 60 * 1000) {
     await new Promise((resolve) => setTimeout(resolve, 400));
-    let result;
-    try {
-      [result] = await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        world: "MAIN",
-        func: readInstalledVersion,
-      });
-    } catch {
-      throw new Error("The folder page was closed before the update finished.");
+    const state = await pageState(tab.id);
+    if (state.error) {
+      await chrome.tabs.remove(tab.id).catch(() => {});
+      throw new Error(state.error);
     }
-    if (result?.result) {
-      await chrome.tabs.remove(tab.id);
-      return result.result;
+    if (state.picked) {
+      picked = true;
+      break;
     }
   }
-  throw new Error("The update was not finished.");
+  if (!picked) {
+    await chrome.tabs.remove(tab.id).catch(() => {});
+    throw new Error("The update was not finished.");
+  }
+
+  // One file per call. The whole package does not fit in a single injection.
+  for (const [path, bytes] of files) {
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: writeChosenFile,
+      args: [path, Array.from(bytes)],
+    });
+  }
+  await chrome.tabs.remove(tab.id);
+  return expected.version;
 }
 
 async function readJson(dir, name) {
@@ -216,23 +288,30 @@ async function downloadPackage(packageUrl) {
   return { files, next, running };
 }
 
+function manifestLists(permission) {
+  const manifest = chrome.runtime.getManifest();
+  return [...(manifest.permissions || []), ...(manifest.optional_permissions || [])].includes(permission);
+}
+
 // Downloads the package and replaces the loaded folder. The caller reloads.
 export async function installUpdatePackage(packageUrl) {
-  // This has to be the first wait. Chrome only shows the permission prompt
-  // during the click, and the settings page cannot open the folder picker.
-  const pageAllowed = await chrome.permissions.request({
-    permissions: ["scripting"],
-    origins: ["https://example.com/*"],
-  });
-  if (!pageAllowed && !directoryPicker()) {
-    throw new Error("Chrome did not allow the folder picker to open.");
+  // First wait, so the click still counts. Only ask for a permission the
+  // loaded manifest already lists. Chrome rejects anything else outright.
+  let pageAllowed = false;
+  if (manifestLists("scripting")) {
+    try {
+      pageAllowed = await chrome.permissions.request({ permissions: ["scripting"] });
+    } catch {
+      pageAllowed = false;
+    }
   }
   await allowUpdateOrigin(packageUrl);
   const { files, next, running } = await downloadPackage(packageUrl);
   const folder = await extensionFolder();
   if (!folder) {
-    if (!pageAllowed) throw new Error("Chrome did not allow the folder picker to open.");
-    return installViaPage(files, { name: running.name, key: running.key || "", version: next.version });
+    const expected = { name: running.name, key: running.key || "", version: next.version };
+    if (pageAllowed) return installViaPage(files, expected);
+    return installViaContentScript(files, expected);
   }
 
   let current;

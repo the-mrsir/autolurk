@@ -120,7 +120,7 @@ els.pauseBtn.addEventListener("click", async () => {
   await send(MESSAGE.TOGGLE_AUTOMATION);
   await refresh();
 });
-els.updateBtn.addEventListener("click", () => send(MESSAGE.OPEN_DASHBOARD, { hash: "settings" }).then(() => window.close()));
+els.updateBtn.addEventListener("click", () => send(MESSAGE.OPEN_DASHBOARD, { hash: "updates" }).then(() => window.close()));
 els.dashboardBtn.addEventListener("click", openDashboard);
 els.openDashboardBtn.addEventListener("click", openDashboard);
 els.cancelAuthBtn.addEventListener("click", async () => {
