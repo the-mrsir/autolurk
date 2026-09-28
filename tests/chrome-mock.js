@@ -179,8 +179,10 @@ export function installChromeMock({ tabs = [], storage = {} } = {}) {
       getURL: (path) => `chrome-extension://test/${path}`,
       sendMessage: () => Promise.resolve(),
       onMessage: { addListener: (fn) => runtimeListeners.push(fn) },
+      onMessageExternal: { addListener() {} },
       onInstalled: { addListener: (fn) => installedListeners.push(fn) },
       onStartup: { addListener: (fn) => startupListeners.push(fn) },
+      reload() {},
     },
 
     storage: {

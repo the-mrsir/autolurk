@@ -7,6 +7,7 @@ import {
   describeUpdate,
   extractZip,
   githubZipUrl,
+  isUpdaterReload,
   listedUpdateOrigins,
   parseGithubRepo,
   parseUpdateManifest,
@@ -15,9 +16,74 @@ import {
   updateOrigins,
   validatePackageManifest,
 } from "../shared/update-logic.js";
-import { pickerBoot } from "../dashboard/update-client.js";
+import { UPDATER_ORIGIN, UPDATER_PAGE } from "../shared/constants.js";
+import {
+  installRepo,
+  rawFileUrl,
+  reloadMessage,
+  safeRepoPath,
+} from "../docs/updater.js";
 
 const mock = chromeMock();
+
+function memoryFolder(files) {
+  const store = new Map(Object.entries(files).map(([path, text]) => [path, new TextEncoder().encode(text)]));
+  const written = [];
+  function directory(prefix) {
+    return {
+      async getDirectoryHandle(name) {
+        return directory(prefix ? `${prefix}/${name}` : name);
+      },
+      async getFileHandle(name) {
+        const path = prefix ? `${prefix}/${name}` : name;
+        return {
+          async getFile() {
+            if (!store.has(path)) throw new Error("not found");
+            const bytes = store.get(path);
+            return { text: async () => new TextDecoder().decode(bytes) };
+          },
+          async createWritable() {
+            let data = new Uint8Array();
+            return {
+              async write(chunk) {
+                data = chunk instanceof Uint8Array ? chunk : new Uint8Array(chunk);
+              },
+              async close() {
+                store.set(path, data);
+                written.push(path);
+              },
+            };
+          },
+        };
+      },
+    };
+  }
+  return { root: directory(""), store, written };
+}
+
+function fakeGithub(files) {
+  return async (url) => {
+    const href = String(url);
+    if (href.includes("/git/trees/")) {
+      return {
+        ok: true,
+        async json() {
+          return { truncated: false, tree: Object.keys(files).map((path) => ({ path, type: "blob" })) };
+        },
+      };
+    }
+    const marker = "/main/";
+    const path = decodeURIComponent(href.slice(href.indexOf(marker) + marker.length));
+    if (!(path in files)) return { ok: false, async arrayBuffer() { return new ArrayBuffer(0); } };
+    const bytes = new TextEncoder().encode(files[path]);
+    return {
+      ok: true,
+      async arrayBuffer() {
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      },
+    };
+  };
+}
 
 function throws(fn) {
   try {
@@ -179,24 +245,86 @@ describe("extension updates", () => {
       origins: ["https://*/*"],
     });
     assert.equal(updateInstallRequest({ permissions: ["storage"] }), null);
-    const boot = pickerBoot.toString();
-    new Function(boot);
-    assert.equal(boot.includes("chrome."), false);
-    assert.ok(boot.includes("showDirectoryPicker"));
-    const expected = JSON.stringify({ name: "AutoLurk Companion", key: "abc", version: "" });
-    new Function("(() => { const expected = " + expected + "; (" + boot + ")(expected); })();");
     const client = readFileSync(new URL("../dashboard/update-client.js", import.meta.url), "utf8");
     const dashboard = readFileSync(new URL("../dashboard/dashboard.js", import.meta.url), "utf8");
-    assert.equal(client.includes("The folder picker did not start."), false);
-    assert.ok(client.includes("script.textContent"), "the picker has to run as the page, not as an extension script");
-    assert.ok(client.includes('mountPicker, [pickerBoot.toString(), JSON.stringify(expected)], "ISOLATED"'));
-    const pick = dashboard.indexOf("window.showDirectoryPicker");
-    const disable = dashboard.indexOf('applyUpdateBtn").disabled = true');
-    assert.ok(pick !== -1 && disable !== -1 && pick < disable, "the folder dialog is not the first thing Update does");
-    const chosen = client.indexOf("await folder.done");
-    const removed = client.indexOf("chrome.tabs.remove");
-    assert.equal((client.match(/chrome\.tabs\.remove/g) || []).length, 1);
-    assert.ok(chosen !== -1 && removed > chosen, "the folder tab is closed before it can be chosen");
+    const popup = readFileSync(new URL("../popup/popup.js", import.meta.url), "utf8");
+    const worker = readFileSync(new URL("../background/service-worker.js", import.meta.url), "utf8");
+    const page = readFileSync(new URL("../docs/updater.html", import.meta.url), "utf8");
+    const updater = readFileSync(new URL("../docs/updater.js", import.meta.url), "utf8");
+    assert.equal(client.includes("executeScript"), false);
+    assert.equal(client.includes("example.com"), false);
+    assert.equal(client.includes("showDirectoryPicker"), false);
+    assert.ok(client.includes("UPDATER_PAGE"));
+    assert.equal(UPDATER_PAGE, "https://the-mrsir.github.io/autolurk/updater.html");
+    assert.ok(dashboard.includes("openUpdater"));
+    assert.ok(popup.includes("UPDATER_PAGE"));
+    assert.ok(worker.includes("onMessageExternal"));
+    assert.ok(page.includes('id="pick"'));
+    assert.ok(page.includes('src="./updater.js"'));
+    const choose = updater.slice(updater.indexOf("export async function chooseAndInstall"));
+    const awaits = [...choose.matchAll(/await\s+([^;\n]+)/g)].map((match) => match[1]);
+    assert.ok(awaits[0].includes("showDirectoryPicker"), "the folder dialog is the first thing the page button does");
+    assert.equal(UPDATER_ORIGIN, "https://the-mrsir.github.io");
+    assert.equal(isUpdaterReload({ type: "autolurk-reload" }, { origin: UPDATER_ORIGIN }), true);
+    assert.equal(
+      isUpdaterReload({ type: "autolurk-reload" }, { url: "https://the-mrsir.github.io/autolurk/updater.html" }),
+      true
+    );
+    assert.equal(isUpdaterReload({ type: "autolurk-reload" }, { origin: "https://example.com" }), false);
+    assert.equal(isUpdaterReload({ type: "other" }, { origin: UPDATER_ORIGIN }), false);
+    assert.equal(reloadMessage("1.2.24", false).includes("chrome://extensions"), true);
+  });
+
+  it("writes the GitHub files into the chosen folder, manifest last", async () => {
+    const key = "same-key";
+    const remote = {
+      "manifest.json": JSON.stringify({ name: "AutoLurk Companion", version: "1.2.24", key }),
+      "content/player.js": "player",
+      "icons/icon16.png": "png",
+    };
+    const folder = memoryFolder({
+      "manifest.json": JSON.stringify({ name: "AutoLurk Companion", version: "1.2.23", key }),
+    });
+    const version = await installRepo(folder.root, { fetch: fakeGithub(remote), onStatus() {} });
+    assert.equal(version, "1.2.24");
+    assert.equal(folder.written.at(-1), "manifest.json");
+    assert.ok(folder.written.indexOf("content/player.js") < folder.written.indexOf("manifest.json"));
+    assert.equal(JSON.parse(new TextDecoder().decode(folder.store.get("manifest.json"))).version, "1.2.24");
+    assert.equal(new TextDecoder().decode(folder.store.get("content/player.js")), "player");
+  });
+
+  it("refuses a different extension, a downgrade, and an unsafe path", async () => {
+    const key = "same-key";
+    const local = { "manifest.json": JSON.stringify({ name: "AutoLurk Companion", version: "1.2.24", key }) };
+    const older = fakeGithub({
+      "manifest.json": JSON.stringify({ name: "AutoLurk Companion", version: "1.2.23", key }),
+    });
+    const folder = memoryFolder(local);
+    let refused = false;
+    try {
+      await installRepo(folder.root, { fetch: older, onStatus() {} });
+    } catch (error) {
+      refused = error.message.includes("newer");
+    }
+    assert.equal(refused, true);
+    assert.deepEqual(folder.written, []);
+
+    const other = fakeGithub({
+      "manifest.json": JSON.stringify({ name: "AutoLurk Companion", version: "1.2.25", key: "other-key" }),
+    });
+    let mismatch = false;
+    try {
+      await installRepo(memoryFolder(local).root, { fetch: other, onStatus() {} });
+    } catch (error) {
+      mismatch = error.message.includes("different copy");
+    }
+    assert.equal(mismatch, true);
+    assert.equal(safeRepoPath("../evil"), "");
+    assert.equal(safeRepoPath("content/player.js"), "content/player.js");
+    assert.equal(
+      rawFileUrl("content/player.js"),
+      "https://raw.githubusercontent.com/the-mrsir/autolurk/main/content/player.js"
+    );
   });
 
   it("records a newer package from a GitHub repository", async () => {

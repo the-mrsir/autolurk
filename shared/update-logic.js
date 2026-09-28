@@ -102,6 +102,18 @@ export function parseUpdateManifest(body) {
   return { version, packageUrl: url.toString() };
 }
 
+const UPDATER_ORIGIN = "https://the-mrsir.github.io";
+
+export function isUpdaterReload(message, sender) {
+  if (message?.type !== "autolurk-reload") return false;
+  if (sender?.origin === UPDATER_ORIGIN) return true;
+  try {
+    return new URL(String(sender?.url || "")).origin === UPDATER_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
 export function describeUpdate(update, manifestUrl) {
   if (!String(manifestUrl || "").trim()) return "Add an update address, then check.";
   if (update?.error) return update.error;

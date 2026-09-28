@@ -1,7 +1,7 @@
 import { MESSAGE } from "../shared/constants.js";
 import { checkForUpdate } from "../background/updates.js";
 import { describeUpdate } from "../shared/update-logic.js";
-import { allowUpdateOrigin, installUpdatePackage } from "./update-client.js";
+import { allowUpdateOrigin, openUpdater } from "./update-client.js";
 import {
   compareFavorites,
   escapeHtml,
@@ -892,41 +892,11 @@ $("checkUpdateBtn").addEventListener("click", async () => {
 });
 
 $("applyUpdateBtn").addEventListener("click", async () => {
-  const packageUrl = state.snapshot?.update?.packageUrl;
-  if (!packageUrl) return;
-  // The dialog only opens if this is the first thing the click does.
-  // Disabling the button, or writing the status line, before that call makes
-  // Chrome drop the click.
-  let directoryHandle = null;
-  if (typeof window.showDirectoryPicker === "function") {
-    try {
-      directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
-    } catch (error) {
-      if (error?.name === "AbortError") {
-        $("updateStatus").textContent = "The folder dialog closed. Click Update again.";
-        return;
-      }
-      // The settings page can see the function and still be refused. A normal
-      // browser tab is the backup.
-      if (error?.name !== "SecurityError") {
-        $("updateStatus").textContent = error?.message || "The folder could not be opened.";
-        return;
-      }
-    }
-  }
-  $("applyUpdateBtn").disabled = true;
-  $("updateStatus").textContent = "Downloading the update…";
+  $("updateStatus").textContent = "Choose the folder that contains manifest.json on the page that opened.";
   try {
-    const version = await installUpdatePackage(packageUrl, (message) => {
-      $("updateStatus").textContent = message;
-    }, directoryHandle);
-    $("updateStatus").textContent = `Version ${version} is in place. Reloading…`;
-    chrome.runtime.reload();
+    await openUpdater();
   } catch (error) {
     $("updateStatus").textContent = error.message;
-    const ready = Boolean(state.snapshot?.update?.packageUrl && state.snapshot?.update?.availableVersion);
-    $("applyUpdateBtn").classList.toggle("hidden", !ready);
-    $("applyUpdateBtn").disabled = !ready;
   }
 });
 

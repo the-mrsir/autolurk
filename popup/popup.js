@@ -1,4 +1,4 @@
-import { MESSAGE } from "../shared/constants.js";
+import { MESSAGE, UPDATER_PAGE } from "../shared/constants.js";
 import { escapeHtml, formatUserCode } from "../shared/utilities.js";
 
 const els = {
@@ -120,7 +120,10 @@ els.pauseBtn.addEventListener("click", async () => {
   await send(MESSAGE.TOGGLE_AUTOMATION);
   await refresh();
 });
-els.updateBtn.addEventListener("click", () => send(MESSAGE.OPEN_DASHBOARD, { hash: "updates" }).then(() => window.close()));
+els.updateBtn.addEventListener("click", () => {
+  chrome.tabs.create({ url: UPDATER_PAGE, active: true });
+  window.close();
+});
 els.dashboardBtn.addEventListener("click", openDashboard);
 els.openDashboardBtn.addEventListener("click", openDashboard);
 els.cancelAuthBtn.addEventListener("click", async () => {
