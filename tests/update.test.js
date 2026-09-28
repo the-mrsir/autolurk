@@ -183,8 +183,16 @@ describe("extension updates", () => {
     new Function(boot);
     assert.equal(boot.includes("chrome."), false);
     assert.ok(boot.includes("showDirectoryPicker"));
+    const expected = JSON.stringify({ name: "AutoLurk Companion", key: "abc", version: "" });
+    new Function("(() => { const expected = " + expected + "; (" + boot + ")(expected); })();");
     const client = readFileSync(new URL("../dashboard/update-client.js", import.meta.url), "utf8");
+    const dashboard = readFileSync(new URL("../dashboard/dashboard.js", import.meta.url), "utf8");
     assert.equal(client.includes("The folder picker did not start."), false);
+    assert.ok(client.includes("script.textContent"), "the picker has to run as the page, not as an extension script");
+    assert.ok(client.includes('mountPicker, [pickerBoot.toString(), JSON.stringify(expected)], "ISOLATED"'));
+    const pick = dashboard.indexOf("window.showDirectoryPicker");
+    const disable = dashboard.indexOf('applyUpdateBtn").disabled = true');
+    assert.ok(pick !== -1 && disable !== -1 && pick < disable, "the folder dialog is not the first thing Update does");
     const chosen = client.indexOf("await folder.done");
     const removed = client.indexOf("chrome.tabs.remove");
     assert.equal((client.match(/chrome\.tabs\.remove/g) || []).length, 1);

@@ -98,7 +98,7 @@ export function pickerBoot(expected) {
 
   document.documentElement.dataset.autolurkPicker = typeof window.showDirectoryPicker;
   if (typeof window.showDirectoryPicker !== "function") {
-    fail("This page cannot choose a folder.");
+    fail("Chrome did not provide a folder picker on this page.");
     return;
   }
 
@@ -213,6 +213,54 @@ function readJobState() {
   };
 }
 
+// An extension-injected function, even in the page's main world, does not get
+// showDirectoryPicker. A script tag does: it runs as the page itself.
+function mountPicker(bootSource, expectedJson) {
+  const script = document.createElement("script");
+  // Concatenate. pickerBoot's own quotes must stay in the source, not be
+  // evaluated while this string is built.
+  script.textContent = "(() => { const expected = " + expectedJson + "; (" + bootSource + ")(expected); })();";
+  document.documentElement.append(script);
+  script.remove();
+}
+
+async function readManifestFromDirectory(dir) {
+  try {
+    return JSON.parse(await (await (await dir.getFileHandle("manifest.json")).getFile()).text());
+  } catch {
+    throw new Error("That folder is not AutoLurk. Choose the folder you loaded on chrome://extensions.");
+  }
+}
+
+function assertSameExtension(manifest, expected) {
+  if (manifest.name !== expected.name || (expected.key && manifest.key !== expected.key)) {
+    throw new Error("That folder is a different extension. Choose the AutoLurk folder.");
+  }
+}
+
+async function writeFileAt(dir, path, bytes) {
+  const filePath = String(path || "");
+  if (!filePath || filePath.split("/").includes("..")) throw new Error("The update contained an unsafe path.");
+  const parts = filePath.split("/");
+  let current = dir;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    current = await current.getDirectoryHandle(parts[index], { create: true });
+  }
+  const handle = await current.getFileHandle(parts[parts.length - 1], { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+  await writable.close();
+}
+
+async function writeDirectory(dir, files, version) {
+  for (const [path, bytes] of files) await writeFileAt(dir, path, bytes);
+  const written = await readManifestFromDirectory(dir);
+  if (written.version !== version) {
+    throw new Error("The folder did not update. Choose the folder you loaded on chrome://extensions.");
+  }
+  return written.version;
+}
+
 async function onPage(tabId, func, args, world = "MAIN") {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -296,7 +344,7 @@ async function installViaPage(expected, onStatus) {
   const folder = watchFolder(tab.id);
   try {
     await tabLoaded(tab.id);
-    await onPage(tab.id, pickerBoot, [expected]);
+    await onPage(tab.id, mountPicker, [pickerBoot.toString(), JSON.stringify(expected)], "ISOLATED");
     await onPage(tab.id, folderBridge, undefined, "ISOLATED");
     onStatus("Choose the AutoLurk folder in the tab that opened. Leave that tab open.");
     await folder.done;
@@ -355,28 +403,42 @@ async function downloadPackage(packageUrl) {
   return { files, next, running };
 }
 
-// Downloads the package and replaces the loaded folder. The caller reloads.
-export async function installUpdatePackage(packageUrl, onStatus = () => {}) {
-  // First wait, so the click still counts. Both strings are the ones listed
-  // in the manifest. A GitHub-specific origin is not, and requesting one is
-  // what produced "Only permissions specified in the manifest may be requested."
-  const request = updateInstallRequest(chrome.runtime.getManifest());
-  if (!request) {
+async function ensureInstallPermission(needsScripting) {
+  const manifest = chrome.runtime.getManifest();
+  const request = needsScripting ? updateInstallRequest(manifest) : { origins: listedUpdateOrigins(manifest) };
+  if (!request || !request.origins?.length) {
     throw new Error("Reload the extension on chrome://extensions, then click Update again.");
   }
+  if (chrome.permissions?.contains && (await chrome.permissions.contains(request))) return;
   let allowed = false;
   try {
     allowed = await chrome.permissions.request(request);
   } catch (error) {
-    throw new Error(error?.message || "Chrome did not allow the folder page.");
+    throw new Error(error?.message || "Chrome did not allow the update download.");
   }
-  if (!allowed) throw new Error("Chrome did not allow the folder page.");
+  if (!allowed) throw new Error("Chrome did not allow the update download.");
+}
 
+// Downloads the package and replaces the loaded folder. The caller reloads.
+// directoryHandle is set when the settings page itself opened the folder
+// dialog. Passing one across to another tab is impossible, so that page writes.
+export async function installUpdatePackage(packageUrl, onStatus = () => {}, directoryHandle = null) {
   const running = chrome.runtime.getManifest();
-  const tabId = await installViaPage(
-    { name: running.name, key: running.key || "", version: "" },
-    onStatus
-  );
+  const expected = { name: running.name, key: running.key || "", version: "" };
+  if (directoryHandle) {
+    assertSameExtension(await readManifestFromDirectory(directoryHandle), expected);
+    await ensureInstallPermission(false);
+    onStatus("Downloading the update…");
+    const { files, next } = await downloadPackage(packageUrl);
+    onStatus(`Writing version ${next.version}…`);
+    return writeDirectory(directoryHandle, files, next.version);
+  }
+
+  // First wait, so the click still counts. Both strings are the ones listed
+  // in the manifest. A GitHub-specific origin is not, and requesting one is
+  // what produced "Only permissions specified in the manifest may be requested."
+  await ensureInstallPermission(true);
+  const tabId = await installViaPage(expected, onStatus);
   onStatus("Downloading the update…");
   const { files, next } = await downloadPackage(packageUrl);
   return writeChosenFolder(tabId, files, next.version);
