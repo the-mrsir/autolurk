@@ -6,12 +6,15 @@ import {
   describeUpdate,
   extractZip,
   githubZipUrl,
+  listedUpdateOrigins,
   parseGithubRepo,
   parseUpdateManifest,
   safeZipPath,
+  updateInstallRequest,
   updateOrigins,
   validatePackageManifest,
 } from "../shared/update-logic.js";
+import { pickerBoot } from "../dashboard/update-client.js";
 
 const mock = chromeMock();
 
@@ -160,6 +163,25 @@ describe("extension updates", () => {
     assert.equal(parseGithubRepo("https://example.com/you/autolurk"), null);
     assert.equal(githubZipUrl(repo, "main"), "https://codeload.github.com/you/autolurk/zip/refs/heads/main");
     assert.equal(updateOrigins("https://github.com/you/autolurk").length, 3);
+    assert.equal(updateOrigins("https://codeload.github.com/you/autolurk/zip/refs/heads/main").length, 1);
+  });
+
+  it("asks only for the host permission written in the manifest", () => {
+    const manifest = {
+      permissions: ["storage"],
+      optional_permissions: ["scripting"],
+      optional_host_permissions: ["https://*/*"],
+    };
+    assert.deepEqual(listedUpdateOrigins(manifest), ["https://*/*"]);
+    assert.deepEqual(updateInstallRequest(manifest), {
+      permissions: ["scripting"],
+      origins: ["https://*/*"],
+    });
+    assert.equal(updateInstallRequest({ permissions: ["storage"] }), null);
+    const boot = pickerBoot.toString();
+    new Function(boot);
+    assert.equal(boot.includes("chrome."), false);
+    assert.ok(boot.includes("showDirectoryPicker"));
   });
 
   it("records a newer package from a GitHub repository", async () => {

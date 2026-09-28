@@ -263,7 +263,27 @@ export function adoptGroupedStreamTab(tabId, channel, stream) {
       const login = normalizeLogin(channel.login);
       const existing =
         (await getManagedTabForUser(channel.userId)) || (await getManagedTabForLogin(login));
-      if (existing) return existing;
+      if (existing && Number(existing.tabId) === Number(tabId)) return existing;
+      if (existing) {
+        // The other computer's copy of a stream this machine already has open.
+        // Leaving it here is how a synced group doubles the count when the two
+        // groups are folded together.
+        let keeperAlive = false;
+        try {
+          const keeper = await chrome.tabs.get(Number(existing.tabId));
+          keeperAlive = extractChannelFromUrl(keeper.url) === login;
+        } catch {
+          keeperAlive = false;
+        }
+        if (keeperAlive) {
+          await closeDuplicateStreamTabs(await chrome.tabs.query({}));
+          return (
+            (await getManagedTabForUser(channel.userId)) ||
+            (await getManagedTabForLogin(login)) ||
+            existing
+          );
+        }
+      }
 
       let tab;
       try {
@@ -1430,6 +1450,13 @@ export function updateLiveGroup(managedTabs, options = {}) {
 }
 
 async function updateLiveGroupNow(managedTabs, options = {}) {
+  // Two computers each open the same favorites, then Chrome syncs both groups
+  // onto this one. Folding the groups together without this step is what turns
+  // four streams into a group titled "AutoLurk · 8".
+  if (await closeDuplicateStreamTabs(await chrome.tabs.query({}))) {
+    managedTabs = await getManagedTabs();
+  }
+
   const settings = await getSettings();
   const startingMeta = await getMeta();
   const stored = startingMeta.groupId ?? null;
@@ -1573,8 +1600,12 @@ export async function consolidateIfSplit() {
   const settings = await getSettings();
   if (!settings.groupTabs) return false;
 
+  // A merge that already happened still leaves both copies in the one group.
+  // The old early return (one group, nothing loose) is why "AutoLurk · 8"
+  // stayed on screen after the two groups were combined.
+  const dupesClosed = await closeDuplicateStreamTabs(await chrome.tabs.query({}));
   const managed = await getManagedTabs();
-  if (!Object.keys(managed).length) return false;
+  if (!Object.keys(managed).length) return dupesClosed;
 
   let ours = [];
   try {
@@ -1582,7 +1613,7 @@ export async function consolidateIfSplit() {
       String(group.title || "").startsWith(GROUP_NAME)
     );
   } catch {
-    return false;
+    return dupesClosed;
   }
 
   // ourManagedTabs already drops tabs the user filed into a group of their own,
@@ -1590,10 +1621,14 @@ export async function consolidateIfSplit() {
   // the rest are not in.
   const ourGroupIds = new Set(ours.map((group) => group.id));
   const tabs = await ourManagedTabs(managed);
-  if (!tabs.length) return false;
+  if (!tabs.length) {
+    if (!dupesClosed) return false;
+    await updateLiveGroup(managed);
+    return true;
+  }
   const loose = tabs.some((tab) => tab.groupId === -1 || !ourGroupIds.has(tab.groupId));
 
-  if (ours.length <= 1 && !loose) return false;
+  if (ours.length <= 1 && !loose && !dupesClosed) return false;
 
   await updateLiveGroup(managed);
   return true;

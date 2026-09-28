@@ -6,7 +6,6 @@ import {
   githubZipUrl,
   parseGithubRepo,
   parseUpdateManifest,
-  updateOrigins,
 } from "../shared/update-logic.js";
 
 const EMPTY = {
@@ -17,10 +16,12 @@ const EMPTY = {
   error: "",
 };
 
-async function originAllowed(url) {
+async function originAllowed() {
   if (!chrome.permissions?.contains) return true;
   try {
-    return await chrome.permissions.contains({ origins: updateOrigins(url) });
+    // Granted https://*/* covers GitHub. Asking contains() for the individual
+    // GitHub origins reports false even after that grant.
+    return await chrome.permissions.contains({ origins: ["https://*/*"] });
   } catch {
     return false;
   }
@@ -88,7 +89,7 @@ export async function checkForUpdate(url) {
   }
 
   try {
-    const allowed = await originAllowed(manifestUrl);
+    const allowed = await originAllowed();
     if (!allowed) {
       throw new Error("Allow the update address from the dashboard, then check again.");
     }

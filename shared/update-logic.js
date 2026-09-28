@@ -60,8 +60,9 @@ export function githubZipUrl(repo, branch) {
   return `https://codeload.github.com/${repo.owner}/${repo.repo}/zip/refs/heads/${githubRef(branch)}`;
 }
 
-// Every host a check or download will touch, so one permission prompt covers
-// the automatic check later. The alarm cannot ask.
+// Hosts a check or download contacts. These strings are not what
+// chrome.permissions.request may be given: the manifest lists https://*/*,
+// and a request for any other origin is rejected.
 export function updateOrigins(input) {
   if (parseGithubRepo(input)) {
     return ["https://api.github.com/*", "https://raw.githubusercontent.com/*", "https://codeload.github.com/*"];
@@ -69,6 +70,21 @@ export function updateOrigins(input) {
   const url = new URL(String(input || "").trim());
   if (url.protocol !== "https:") throw new Error("The update address has to be https.");
   return [`${url.origin}/*`];
+}
+
+// The only host permission this extension is allowed to ask for at runtime.
+export function listedUpdateOrigins(manifest) {
+  const origins = [...(manifest?.host_permissions || []), ...(manifest?.optional_host_permissions || [])];
+  return origins.includes("https://*/*") ? ["https://*/*"] : [];
+}
+
+// scripting plus that one origin. Anything else throws
+// "Only permissions specified in the manifest may be requested."
+export function updateInstallRequest(manifest) {
+  const permissions = [...(manifest?.permissions || []), ...(manifest?.optional_permissions || [])];
+  const origins = listedUpdateOrigins(manifest);
+  if (!permissions.includes("scripting") || !origins.length) return null;
+  return { permissions: ["scripting"], origins };
 }
 
 export function parseUpdateManifest(body) {

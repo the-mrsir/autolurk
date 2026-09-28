@@ -416,6 +416,72 @@ describe("one AutoLurk group, ever", () => {
     assert.equal(mock.tabState.get(1).windowId, 2);
   });
 
+  it("keeps one tab per channel when both computers opened the same streams", async () => {
+    const channels = ["eslcs", "esfandtv", "northernlion", "otk"];
+    const tabs = [];
+    const managedTabs = {};
+    for (let index = 0; index < channels.length; index += 1) {
+      const login = channels[index];
+      const localId = index + 1;
+      const remoteId = index + 5;
+      tabs.push({
+        id: localId,
+        windowId: 1,
+        url: `https://www.twitch.tv/${login}`,
+        active: index === 0,
+      });
+      tabs.push({
+        id: remoteId,
+        windowId: 2,
+        url: `https://www.twitch.tv/${login}`,
+        active: false,
+      });
+      managedTabs[String(localId)] = {
+        tabId: localId,
+        userId: String(localId),
+        login,
+        expectedChannel: login,
+      };
+    }
+    mock.reset({
+      tabs,
+      storage: {
+        settings: { muteTabs: true, groupTabs: true, collapseGroup: false },
+        managedTabs,
+      },
+    });
+    const localGroup = await mock.chrome.tabs.group({
+      tabIds: [1, 2, 3, 4],
+      createProperties: { windowId: 1 },
+    });
+    await mock.chrome.tabGroups.update(localGroup, { title: "AutoLurk · 4" });
+    const remoteGroup = await mock.chrome.tabs.group({
+      tabIds: [5, 6, 7, 8],
+      createProperties: { windowId: 2 },
+    });
+    await mock.chrome.tabGroups.update(remoteGroup, { title: "AutoLurk · 4" });
+    mock.local.meta = { groupId: localGroup };
+
+    await consolidate();
+
+    const twitch = [...mock.tabState.values()].filter((tab) =>
+      String(tab.url || "").includes("twitch.tv/")
+    );
+    assert.equal(twitch.length, 4, "both computers' copies survived the merge");
+    assert.deepEqual(
+      twitch.map((tab) => tab.url.split("/").pop()).sort(),
+      [...channels].sort()
+    );
+    const groups = [...mock.groupState.values()].filter((group) =>
+      String(group.title || "").startsWith("AutoLurk")
+    );
+    assert.equal(groups.length, 1, "the two groups were not combined");
+    assert.equal(groups[0].title, "AutoLurk · 4");
+    for (const id of [1, 2, 3, 4]) {
+      assert.equal(mock.tabState.get(id).groupId, groups[0].id);
+    }
+  });
+
   it("does not create a group when Chrome cannot enumerate existing groups", async () => {
     mock.reset({
       tabs: [{ id: 1, windowId: 1, url: "https://www.twitch.tv/one", active: true }],
@@ -655,6 +721,58 @@ describe("the periodic split sweep", () => {
     assert.equal(await sweep(), true);
     assert.equal(autoLurkGroups(mock).length, 1, "the stray group was not merged away");
     assert.equal(groupsHoldingManagedTabs(mock).size, 1);
+  });
+
+  it("drops duplicate channels after the two groups have already been combined", async () => {
+    const channels = ["eslcs", "esfandtv", "northernlion", "otk"];
+    const tabs = [{ id: 9, windowId: 1, url: "https://example.com", active: true }];
+    const managedTabs = {};
+    const grouped = [];
+    for (let index = 0; index < channels.length; index += 1) {
+      const login = channels[index];
+      const localId = index + 1;
+      const copyId = index + 5;
+      tabs.push({
+        id: localId,
+        windowId: 1,
+        url: `https://www.twitch.tv/${login}`,
+        active: false,
+      });
+      tabs.push({
+        id: copyId,
+        windowId: 1,
+        url: `https://www.twitch.tv/${login}`,
+        active: false,
+      });
+      managedTabs[String(localId)] = {
+        tabId: localId,
+        userId: String(localId),
+        login,
+        expectedChannel: login,
+      };
+      grouped.push(localId, copyId);
+    }
+    mock.reset({
+      tabs,
+      storage: {
+        settings: { muteTabs: true, groupTabs: true, collapseGroup: false },
+        managedTabs,
+      },
+    });
+    const groupId = await mock.chrome.tabs.group({
+      tabIds: grouped,
+      createProperties: { windowId: 1 },
+    });
+    await mock.chrome.tabGroups.update(groupId, { title: "AutoLurk · 8" });
+    mock.local.meta = { groupId };
+
+    assert.equal(await sweep(), true, "a group of doubled streams was treated as healthy");
+    const twitch = [...mock.tabState.values()].filter((tab) =>
+      String(tab.url || "").includes("twitch.tv/")
+    );
+    assert.equal(twitch.length, 4);
+    assert.equal(autoLurkGroups(mock).length, 1);
+    assert.equal(autoLurkGroups(mock)[0].title, "AutoLurk · 4");
   });
 
   it("pulls back a stream that ended up in no group at all", async () => {

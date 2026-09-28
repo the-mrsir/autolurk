@@ -872,7 +872,7 @@ $("checkUpdateBtn").addEventListener("click", async () => {
   $("checkUpdateBtn").disabled = true;
   $("updateStatus").textContent = "Checking…";
   try {
-    if (url) await allowUpdateOrigin(url);
+    if (url) await allowUpdateOrigin();
     // Run here, not in the service worker. The worker keeps the script it
     // started with, so a fix on disk would not run until Chrome restarted it.
     await checkForUpdate(url);
