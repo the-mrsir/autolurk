@@ -1,5 +1,5 @@
 import { ALARMS, GROUP_NAME, MESSAGE, PUBLIC_SCALE } from "../shared/constants.js";
-import { normalizeSyncGroup } from "../shared/sync-logic.js";
+import { makeSyncGroup, normalizeSyncGroup } from "../shared/sync-logic.js";
 import { HEALTH } from "../shared/health.js";
 import {
   getAuth,
@@ -74,6 +74,7 @@ import {
   wakeManagedTab,
 } from "./tab-manager.js";
 import {
+  ensureSyncGroup,
   exportData,
   handleSyncChange,
   importData,
@@ -138,6 +139,7 @@ async function runInitialize(options) {
   const { reset } = options;
   await runMigrations();
   const previousMeta = await getMeta();
+  await ensureSyncGroup().catch((error) => console.warn("Sync code failed", error));
   // Before anything acts on favorites, so a machine that was switched off does
   // not spend a poll opening streams the user unstarred on the other one.
   await reconcileSync().catch((error) => console.warn("Sync reconcile failed", error));
@@ -399,7 +401,9 @@ async function handleMessage(message, sender) {
       return updateFavorite(message.userId, message.patch || {});
     case MESSAGE.UPDATE_SETTINGS: {
       const previous = await getSettings();
-      const settings = await saveSettings(message.patch || {});
+      const patch = { ...(message.patch || {}) };
+      if ("syncGroup" in patch && !normalizeSyncGroup(patch.syncGroup)) patch.syncGroup = makeSyncGroup();
+      const settings = await saveSettings(patch);
       // Stamped so the user's other computer can tell whose change is newer.
       await saveMeta({ settingsUpdatedAt: Date.now() });
       schedulePush("settings");

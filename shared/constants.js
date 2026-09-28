@@ -212,8 +212,8 @@ export const DEFAULT_SETTINGS = {
   updateManifestUrl: "",
   sevenTvEnabled: true,
   // Shares favorites and preferences with the user's other computers through
-  // the Chrome profile. The Twitch login is never included. Nothing is shared
-  // until syncGroup is set: that name is the set they join.
+  // the Chrome profile. The Twitch login is never included. syncGroup is filled
+  // with a generated code on startup. Paste another computer's code to join it.
   syncEnabled: true,
   syncGroup: "",
 };

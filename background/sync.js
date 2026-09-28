@@ -16,6 +16,7 @@ import {
   itemTooLarge,
   mergeFavorites,
   mergeSettings,
+  makeSyncGroup,
   normalizeSyncGroup,
   settingsKey,
   stripUnsynced,
@@ -58,6 +59,18 @@ async function syncContext() {
 
 export async function syncEnabled() {
   return (await syncContext()).enabled;
+}
+
+// Every install gets its own code, so two computers do not share a set until
+// someone copies the code across. A blank code is filled in here rather than
+// left as a prompt to invent one.
+export async function ensureSyncGroup() {
+  const settings = await getSettings();
+  const existing = normalizeSyncGroup(settings.syncGroup);
+  if (existing) return existing;
+  const made = makeSyncGroup();
+  await saveSettings({ syncGroup: made });
+  return made;
 }
 
 // The old unscoped keys were one set for every computer. Once a name is in

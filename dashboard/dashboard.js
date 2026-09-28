@@ -574,10 +574,10 @@ function renderSettings(snap) {
     syncSummary.textContent = !settings.syncEnabled
       ? "Sync is off. Favorites stay on this computer."
       : !name
-        ? "Type a sync name and save. Favorites stay on this computer until you do."
+        ? "A sync code is created when the extension starts."
         : sync.lastSyncedAt
-          ? `Sharing favorites and settings under “${name}”. Last synced ${formatRelativeTime(sync.lastSyncedAt)}.`
-          : `Sharing favorites and settings under “${name}”. Not synced yet.`;
+          ? `Sharing favorites and settings with code ${name}. Last synced ${formatRelativeTime(sync.lastSyncedAt)}.`
+          : `Sharing favorites and settings with code ${name}. Not synced yet.`;
   }
 }
 
@@ -782,6 +782,17 @@ $("multistreamExitBtn").addEventListener("click", async () => {
 // ---------------------------------------------------------------------------
 
 $("syncExtensionId").textContent = chrome.runtime.id;
+
+$("copySyncCode").addEventListener("click", async () => {
+  const code = $("syncGroup").value.trim();
+  if (!code) return;
+  try {
+    await navigator.clipboard.writeText(code);
+    $("syncResult").textContent = "Sync code copied.";
+  } catch (error) {
+    $("syncResult").textContent = error.message;
+  }
+});
 
 function describeSync(info) {
   if (!info.available) return "Chrome sync storage is not available in this browser.";

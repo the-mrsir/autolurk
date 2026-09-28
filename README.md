@@ -23,7 +23,7 @@ Connect Twitch from the dashboard. Sign in on each computer. The Twitch login is
 
 ## Other computers
 
-Under **Settings → Your other computers**, turn sync on and set a **Sync name**. Computers on the same Chrome profile that use that exact name share favorites and settings. A different name is a separate set. Leave it blank to keep everything on this computer.
+Each computer makes its own sync code, shown under **Settings → Your other computers**. Computers on the same Chrome profile share favorites and settings when they use the same code. Copy the code from one computer and paste it into the other, then save.
 
 Both computers have to show the same extension ID on that page. Do not change or remove the `key` in `manifest.json`.
 

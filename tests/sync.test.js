@@ -6,6 +6,7 @@ import { chromeMock } from "./chrome-mock.js";
 import {
   favoriteKey,
   itemTooLarge,
+  makeSyncGroup,
   mergeFavorites,
   mergeSettings,
   stripUnsynced,
@@ -19,6 +20,14 @@ const minutes = (n) => n * 60_000;
 function favorite(userId, overrides = {}) {
   return { userId, login: userId, autoOpen: true, priority: "normal", ...overrides };
 }
+
+describe("a sync code", () => {
+  it("makes a short code this computer can hand to another", () => {
+    const code = makeSyncGroup();
+    assert.equal(/^[a-z2-9]{4}-[a-z2-9]{4}$/.test(code), true);
+    assert.equal(code === makeSyncGroup(), false);
+  });
+});
 
 describe("merging favorites between computers", () => {
   it("collects both machines' favorites the first time they meet", () => {

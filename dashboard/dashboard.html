@@ -236,19 +236,21 @@
         <section class="set-block">
           <h2>Your other computers</h2>
           <p class="meta">
-            Favorites, their per-channel options, and these settings are shared only
-            with computers that use the same sync name and the same Chrome profile.
-            A different name keeps a separate set. Your Twitch login is never shared
-            — connect Twitch separately on each machine. Which streams are open stays
-            on this computer.
+            This computer makes a sync code. Favorites and settings are shared with
+            other computers on the same Chrome profile that use this code. Paste a
+            code from another computer to join its set. The Twitch login stays on
+            each computer. Open streams stay on this one.
           </p>
           <label class="set-row">
             <span>Sync favorites and settings</span>
             <input id="syncEnabled" type="checkbox" />
           </label>
           <label class="set-row">
-            <span>Sync name</span>
-            <input id="syncGroup" type="text" maxlength="80" spellcheck="false" autocomplete="off" placeholder="A name only your computers share" />
+            <span>Sync code</span>
+            <span class="inline">
+              <input id="syncGroup" type="text" maxlength="80" spellcheck="false" autocomplete="off" />
+              <button id="copySyncCode" type="button">Copy</button>
+            </span>
           </label>
           <p id="syncSummary" class="meta"></p>
           <p class="meta">

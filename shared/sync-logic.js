@@ -21,11 +21,19 @@ export const SYNC_KEYS = {
   META: "syncMeta",
 };
 
-// The name the user typed. Computers that type the same name share one set of
-// favorites and settings; a different name is a different set. It stays on
-// this machine: if it traveled with the settings, changing it here would drag
-// every other computer into the new set.
+// A code this computer made, or one pasted from another computer. Computers
+// that use the same code share one set of favorites and settings. The code
+// stays on this machine: if it traveled with the settings, changing it here
+// would drag every other computer into the new set.
 export const SYNC_GROUP_MAX = 80;
+
+const SYNC_CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+
+export function makeSyncGroup() {
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const chars = [...bytes].map((byte) => SYNC_CODE_ALPHABET[byte % SYNC_CODE_ALPHABET.length]);
+  return `${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
+}
 
 export function normalizeSyncGroup(value) {
   return String(value ?? "").trim().slice(0, SYNC_GROUP_MAX);
