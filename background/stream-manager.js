@@ -1,4 +1,4 @@
-import { PRIORITY_RANK, TAB_LOAD_GRACE_MS } from "../shared/constants.js";
+import { opensInFront, PRIORITY_RANK, TAB_LOAD_GRACE_MS } from "../shared/constants.js";
 import { normalizeSyncGroup } from "../shared/sync-logic.js";
 import {
   createFavorite,
@@ -329,7 +329,7 @@ async function openFavoriteIfLive(userId, options = {}) {
 
   const channel = resolveChannel(userId, follows, stream, favorite);
   if (!canAutoOpen(settings, favorite, stream, dismissed, options)) return null;
-  return openManagedStream(channel, stream);
+  return openManagedStream(channel, stream, { focus: opensInFront(settings, true) });
 }
 
 export async function refreshStreamForUser(userId) {
@@ -710,7 +710,9 @@ async function handleAutoOpens(favorites, follows, nextLive, dismissed, settings
       if (!replaced) continue;
     }
     try {
-      const entry = await openManagedStream(candidate.channel, candidate.stream);
+      const entry = await openManagedStream(candidate.channel, candidate.stream, {
+        focus: opensInFront(settings, true),
+      });
       if (entry) {
         openCount += 1;
         // A tab existing is not the same as its media moving. Keep it managed

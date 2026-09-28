@@ -142,6 +142,15 @@
           <h2>Streams</h2>
           <label class="set-row"><span>Run AutoLurk</span><input id="automationEnabled" type="checkbox" /></label>
           <label class="set-row"><span>Open favorites automatically</span><input id="autoOpenFavorites" type="checkbox" /></label>
+          <label class="set-row">
+            <span>Open streams in front</span>
+            <select id="openInFront">
+              <option value="off">Stay in the background</option>
+              <option value="favorites">Favorites</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <p class="meta">Favorites brings starred channels to the front. All does that for every stream AutoLurk opens.</p>
           <label class="set-row"><span>Close streams when they go offline</span><input id="autoCloseOffline" type="checkbox" /></label>
           <label class="set-row"><span>Close the tab when a raid redirects it</span><input id="closeRaids" type="checkbox" /></label>
           <label class="set-row"><span>Mute Chrome tabs</span><input id="muteTabs" type="checkbox" /></label>
@@ -218,8 +227,8 @@
           <p class="meta">
             When a favorite's watch streak is expiring, AutoLurk opens that channel's
             recovery clip or VOD. Bringing it to the front is what lets the video
-            actually start; favorite streams still open in the background. The recovery
-            tab closes once Twitch's own streak query no longer shows an expiration.
+            actually start. The recovery tab closes once Twitch's own streak query
+            no longer shows an expiration.
           </p>
           <p id="pointsSummary" class="meta"></p>
         </section>

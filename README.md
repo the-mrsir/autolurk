@@ -12,7 +12,7 @@ Connect Twitch from the dashboard. Sign in on each computer. The Twitch login is
 
 ## What you get
 
-- Live favorites open as background tabs in one **AutoLurk** group. The tab you are using stays in front.
+- Live favorites open as background tabs in one **AutoLurk** group. The tab you are using stays in front, unless **Open streams in front** is set to favorites or all.
 - The player stays unmuted. The Chrome tab is muted.
 - Background tabs play at 160p. The tab you are looking at plays at 1080p.
 - Tabs close when the stream ends or raids away. A tab you close yourself stays closed until the next broadcast.

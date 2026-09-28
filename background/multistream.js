@@ -120,7 +120,7 @@ async function beginMultistream(userIds) {
   for (const { channel, stream } of wanted) {
     if (await managedTabFor(channel.userId)) continue;
     try {
-      await openManagedStream(channel, stream);
+      await openManagedStream(channel, stream, { focus: false });
     } catch (error) {
       console.warn(`Could not open a lurk tab for ${label(channel)}`, error);
     }

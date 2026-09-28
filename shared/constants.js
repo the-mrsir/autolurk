@@ -179,6 +179,13 @@ export const RESERVED_TWITCH_PATHS = new Set([
   "wallet",
 ]);
 
+export function opensInFront(settings, favorite) {
+  const mode = settings?.openInFront || "off";
+  if (mode === "all") return true;
+  if (mode === "favorites") return Boolean(favorite);
+  return false;
+}
+
 export const DEFAULT_SETTINGS = {
   clientId: "",
   automationEnabled: true,
@@ -204,9 +211,11 @@ export const DEFAULT_SETTINGS = {
   // Opens a recovery clip or VOD when a favorite's watch streak is expiring.
   saveWatchStreaks: true,
   // A tab that has never been visible often never receives a media source.
-  // Showing the recovery video is what lets it actually play. Favorite lurk
-  // tabs stay in the background either way.
+  // Showing the recovery video is what lets it actually play.
   streakOpenInFront: true,
+  // Automatic streams stay behind the tab the user is on. "favorites" brings
+  // starred channels to the front. "all" does that for every stream AutoLurk opens.
+  openInFront: "off",
   // A public GitHub repository, or a JSON file { version, packageUrl }.
   // Blank uses this repository. Chrome does not update an unpacked folder on its own.
   updateManifestUrl: "https://github.com/the-mrsir/autolurk",

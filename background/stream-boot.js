@@ -1,4 +1,4 @@
-import { MESSAGE } from "../shared/constants.js";
+import { MESSAGE, opensInFront } from "../shared/constants.js";
 import {
   allowedStageForVisibleTab,
   evaluateHealth,
@@ -8,7 +8,7 @@ import {
   RECOVERY_STAGE,
   shouldAttemptRecovery,
 } from "../shared/health.js";
-import { getManagedTabs, getSettings, mutateManagedTabs, updateManagedTab } from "../shared/storage.js";
+import { getFavorites, getManagedTabs, getSettings, mutateManagedTabs, updateManagedTab } from "../shared/storage.js";
 import { normalizeLogin } from "../shared/utilities.js";
 import { logActivity } from "./activity.js";
 // Circular with tab-manager.js, which imports the boot watch from here. That is
@@ -488,6 +488,7 @@ async function reopenStream(tabId, entry) {
     // Tab may already be gone; opening a replacement still makes sense.
   }
   try {
+    const [settings, favorites] = await Promise.all([getSettings(), getFavorites()]);
     await openManagedStream(
       {
         userId: entry.userId,
@@ -495,7 +496,10 @@ async function reopenStream(tabId, entry) {
         displayName: entry.displayName,
       },
       { streamId: entry.streamId },
-      { carry: { reopenCount: (entry.reopenCount || 0) + 1 } }
+      {
+        focus: opensInFront(settings, Boolean(favorites[entry.userId])),
+        carry: { reopenCount: (entry.reopenCount || 0) + 1 },
+      }
     );
     return true;
   } catch {

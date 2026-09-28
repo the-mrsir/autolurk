@@ -1,4 +1,5 @@
 import { assert, describe, it } from "./harness.js";
+import { opensInFront } from "../shared/constants.js";
 import { chromeMock } from "./chrome-mock.js";
 import {
   emptyPointsEntry,
@@ -246,5 +247,22 @@ describe("7TV lookups", () => {
     } finally {
       await cleanup();
     }
+  });
+});
+
+describe("opening streams in front", () => {
+  it("keeps automatic streams behind the user unless asked", () => {
+    assert.equal(opensInFront({}, true), false);
+    assert.equal(opensInFront({ openInFront: "off" }, true), false);
+  });
+
+  it("brings favorites forward only when that is the choice", () => {
+    assert.equal(opensInFront({ openInFront: "favorites" }, true), true);
+    assert.equal(opensInFront({ openInFront: "favorites" }, false), false);
+  });
+
+  it("brings every stream forward when all is chosen", () => {
+    assert.equal(opensInFront({ openInFront: "all" }, true), true);
+    assert.equal(opensInFront({ openInFront: "all" }, false), true);
   });
 });
