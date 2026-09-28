@@ -102,35 +102,40 @@ export function pickerBoot(expected) {
     return;
   }
 
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    status.dataset.autolurkPicking = "1";
-    status.textContent = "Waiting for the folder…";
-    delete status.dataset.autolurkError;
+  // showDirectoryPicker only opens if it is the first thing the click does.
+  // Disabling the button, or writing the page, before that call makes Chrome
+  // drop the click and the dialog never appears.
+  button.addEventListener("click", () => {
+    let request;
     try {
-      const dir = await window.showDirectoryPicker({ mode: "readwrite", id: "autolurk-extension" });
-      let manifest;
-      try {
-        manifest = JSON.parse(await (await (await dir.getFileHandle("manifest.json")).getFile()).text());
-      } catch {
-        throw new Error("That folder is not AutoLurk. Choose the folder you loaded on chrome://extensions.");
-      }
-      if (manifest.name !== expected.name || (expected.key && manifest.key !== expected.key)) {
-        throw new Error("That folder is a different extension. Choose the AutoLurk folder.");
-      }
-      window.__autolurkDir = dir;
-      status.dataset.autolurkPicked = "1";
-      status.textContent = `Writing version ${expected.version}…`;
+      request = window.showDirectoryPicker({ mode: "readwrite" });
     } catch (error) {
-      button.disabled = false;
-      if (error?.name === "AbortError") {
-        status.textContent = "Choose the AutoLurk folder to continue.";
-        return;
-      }
-      status.textContent = error.message || "The folder could not be opened.";
-    } finally {
-      delete status.dataset.autolurkPicking;
+      status.textContent = error?.message || "The folder could not be opened.";
+      return;
     }
+    request
+      .then(async (dir) => {
+        let manifest;
+        try {
+          manifest = JSON.parse(await (await (await dir.getFileHandle("manifest.json")).getFile()).text());
+        } catch {
+          throw new Error("That folder is not AutoLurk. Choose the folder you loaded on chrome://extensions.");
+        }
+        if (manifest.name !== expected.name || (expected.key && manifest.key !== expected.key)) {
+          throw new Error("That folder is a different extension. Choose the AutoLurk folder.");
+        }
+        window.__autolurkDir = dir;
+        status.dataset.autolurkPicked = "1";
+        status.textContent = `Writing version ${expected.version}…`;
+        button.disabled = true;
+      })
+      .catch((error) => {
+        button.disabled = false;
+        status.textContent =
+          error?.name === "AbortError"
+            ? "The folder dialog closed. Click Choose AutoLurk folder again."
+            : error?.message || "The folder could not be opened.";
+      });
   });
 }
 
