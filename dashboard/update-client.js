@@ -95,9 +95,9 @@ function tabLoaded(tabId) {
   });
 }
 
-// Runs in the page's own JavaScript, not the extension's. The folder picker
-// is an own property of that window, so an extension script cannot see it.
-function pageProgram(expected, token) {
+// Injected into the page's own JavaScript. A script tag is blocked there.
+// The folder handle has to stay on this window; it cannot be sent back.
+function showFolderPicker(expected) {
   const root = document.createElement("div");
   root.id = "autolurk-update";
   root.style.cssText = "position:fixed;inset:0;z-index:2147483647;background:#16171d;color:#f2f2f2;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;font:16px/1.4 Segoe UI,sans-serif;text-align:center;padding:24px;";
@@ -119,41 +119,12 @@ function pageProgram(expected, token) {
     return;
   }
 
-  let dir = null;
-  document.addEventListener("autolurk-write", async () => {
-    const slot = document.getElementById("autolurk-payload");
-    let message;
-    try {
-      message = JSON.parse(slot?.textContent || "");
-    } catch {
-      return;
-    }
-    if (!message || message.token !== token || !dir) return;
-    try {
-      const parts = String(message.path).split("/");
-      let current = dir;
-      for (let index = 0; index < parts.length - 1; index += 1) {
-        current = await current.getDirectoryHandle(parts[index], { create: true });
-      }
-      const handle = await current.getFileHandle(parts[parts.length - 1], { create: true });
-      const writable = await handle.createWritable();
-      await writable.write(new Uint8Array(message.data));
-      await writable.close();
-      status.dataset.autolurkWrote = message.path;
-    } catch (error) {
-      status.dataset.autolurkError = error.message || "The update was not written.";
-      status.textContent = status.dataset.autolurkError;
-    }
-  });
-
   button.addEventListener("click", async () => {
     button.disabled = true;
     status.textContent = "Waiting for the folder…";
     delete status.dataset.autolurkError;
     try {
-      const picker = window.showDirectoryPicker;
-      if (typeof picker !== "function") throw new Error("This page cannot choose a folder.");
-      dir = await picker.call(window, { mode: "readwrite", id: "autolurk-extension" });
+      const dir = await window.showDirectoryPicker({ mode: "readwrite", id: "autolurk-extension" });
       let manifest;
       try {
         manifest = JSON.parse(await (await (await dir.getFileHandle("manifest.json")).getFile()).text());
@@ -163,6 +134,7 @@ function pageProgram(expected, token) {
       if (manifest.name !== expected.name || (expected.key && manifest.key !== expected.key)) {
         throw new Error("That folder is a different extension. Choose the AutoLurk folder.");
       }
+      window.__autolurkDir = dir;
       status.dataset.autolurkPicked = "1";
       status.textContent = `Writing version ${expected.version}…`;
     } catch (error) {
@@ -177,11 +149,18 @@ function pageProgram(expected, token) {
   });
 }
 
-function installProgram(source) {
-  const script = document.createElement("script");
-  script.textContent = source;
-  document.documentElement.append(script);
-  script.remove();
+async function writeChosenFile(path, data) {
+  const dir = window.__autolurkDir;
+  if (!dir) throw new Error("The folder picker was closed.");
+  const parts = String(path).split("/");
+  let current = dir;
+  for (let index = 0; index < parts.length - 1; index += 1) {
+    current = await current.getDirectoryHandle(parts[index], { create: true });
+  }
+  const handle = await current.getFileHandle(parts[parts.length - 1], { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(new Uint8Array(data));
+  await writable.close();
 }
 
 function readUpdateState() {
@@ -190,22 +169,7 @@ function readUpdateState() {
     ready: document.documentElement.dataset.autolurkPicker || "",
     picked: status?.dataset.autolurkPicked || "",
     error: status?.dataset.autolurkError || "",
-    wrote: status?.dataset.autolurkWrote || "",
   };
-}
-
-function sendFile(token, path, data) {
-  const status = document.querySelector("#autolurk-update-status");
-  if (status) delete status.dataset.autolurkWrote;
-  let slot = document.getElementById("autolurk-payload");
-  if (!slot) {
-    slot = document.createElement("script");
-    slot.id = "autolurk-payload";
-    slot.type = "application/json";
-    document.documentElement.append(slot);
-  }
-  slot.textContent = JSON.stringify({ token, path, data });
-  slot.dispatchEvent(new Event("autolurk-write", { bubbles: true }));
 }
 
 async function pageState(tabId) {
@@ -222,27 +186,24 @@ async function pageState(tabId) {
 }
 
 async function installViaPage(files, expected) {
-  const token = crypto.randomUUID();
-  const source = `(${pageProgram.toString()})(${JSON.stringify(expected).replace(/</g, "\\u003c")},${JSON.stringify(token)})`;
   const tab = await chrome.tabs.create({ url: "https://example.com/", active: true });
   await tabLoaded(tab.id);
   await chrome.scripting.executeScript({
     target: { tabId: tab.id },
-    func: installProgram,
-    args: [source],
+    world: "MAIN",
+    func: showFolderPicker,
+    args: [expected],
   });
 
   const started = Date.now();
   let picked = false;
-  let ready = false;
   while (Date.now() - started < 5 * 60 * 1000) {
     await new Promise((resolve) => setTimeout(resolve, 400));
     const state = await pageState(tab.id);
-    if (!ready && !state.ready && Date.now() - started > 3000) {
+    if (!state.ready && Date.now() - started > 3000) {
       await chrome.tabs.remove(tab.id).catch(() => {});
-      throw new Error("The folder page blocked the picker.");
+      throw new Error("The folder picker did not start.");
     }
-    ready = Boolean(state.ready);
     if (state.error) {
       await chrome.tabs.remove(tab.id).catch(() => {});
       throw new Error(state.error);
@@ -260,27 +221,10 @@ async function installViaPage(files, expected) {
   for (const [path, bytes] of files) {
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: sendFile,
-      args: [token, path, Array.from(bytes)],
+      world: "MAIN",
+      func: writeChosenFile,
+      args: [path, Array.from(bytes)],
     });
-    const fileStarted = Date.now();
-    let written = false;
-    while (Date.now() - fileStarted < 30000) {
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      const state = await pageState(tab.id);
-      if (state.error) {
-        await chrome.tabs.remove(tab.id).catch(() => {});
-        throw new Error(state.error);
-      }
-      if (state.wrote === path) {
-        written = true;
-        break;
-      }
-    }
-    if (!written) {
-      await chrome.tabs.remove(tab.id).catch(() => {});
-      throw new Error(`Could not write ${path}.`);
-    }
   }
   await chrome.tabs.remove(tab.id);
   return expected.version;

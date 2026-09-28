@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AutoLurk Companion",
-  "version": "1.2.13",
+  "version": "1.2.14",
   "description": "Follow monitoring, favorite auto-open, muted managed Twitch tabs, and raid-aware cleanup.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5xf2r5ndJ8O83Pl06fZVv6mjlsfFNK7myZT6OdYI0i7QfdnE8ucNBQqOBz0SdyNsy0Dq2OK60g+gDVcpLCsgNs5erTeFeybSTi7EvlsG2IwUHh+/aj7b47uOEG1V6g6d1UcBKqFwqN3s1WCLa6ElC14GtkObhhE25jBv3HBiBE8Aoz9zhp44uPfxBoqkwecxp8w7B/TF6GlZ1Xsppf6NtXeiQu/hT1V7xqLriTLMTkYlTrgWFrL24bzH7Uy9DpKt/6kXuV7zX6jCOyLqOPI4pMttT8PaQIOfln94LdO7311Nd9b6Y86DnsIqWe0XLNU+mrSvU/6eNzHCSAtELjTkuwIDAQAB",
   "action": {
