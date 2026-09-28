@@ -26,6 +26,8 @@ describe("service worker wake", () => {
     assert.equal(alarmsAtWake.get(ALARMS.STREAK_CHECK).periodInMinutes, 60);
     assert.ok(alarmsAtWake.has(ALARMS.UPDATE_CHECK));
     assert.equal(alarmsAtWake.get(ALARMS.UPDATE_CHECK).periodInMinutes, 720);
+    assert.ok(alarmsAtWake.has(ALARMS.SERVER_ROTATE));
+    assert.equal(alarmsAtWake.get(ALARMS.SERVER_ROTATE).periodInMinutes, 2);
   });
 
   it("honours the saved interval instead of resetting it", () => {
@@ -75,6 +77,7 @@ describe("starting up twice at once", () => {
       ALARMS.HEALTH_CHECK,
       ALARMS.STREAK_CHECK,
       ALARMS.UPDATE_CHECK,
+      ALARMS.SERVER_ROTATE,
     ];
     assert.equal(created, specs.length, `the schedule was rebuilt ${created / specs.length} times`);
   });

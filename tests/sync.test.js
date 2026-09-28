@@ -229,6 +229,7 @@ describe("merging preferences between computers", () => {
       syncGroup: "house",
       backgroundQuality: "360p30",
       watchingQuality: "480p30",
+      serverRotation: true,
       muteTabs: false,
     });
     assert.deepEqual(stripped, { muteTabs: false });

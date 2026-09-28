@@ -382,6 +382,12 @@ async function healthCheckPass() {
     // the next pass, in the same order.
     const stage = nextRecoveryStage(entry);
     const needsScreen = stage === RECOVERY_STAGE.RELOAD || stage === RECOVERY_STAGE.REOPEN;
+    // Server rotation is the thing that opens a stream and reloads it. The
+    // ordinary ladder must not take the screen on its own minute as well.
+    if (needsScreen && (await getSettings()).serverRotation) {
+      await updateManagedTab(tabId, { health: HEALTH.STALLED, healthReason: reason });
+      continue;
+    }
     if (needsScreen && !visible) {
       if (restarts >= RESTARTS_PER_PASS) {
         await updateManagedTab(tabId, { health: HEALTH.STALLED, healthReason: reason });

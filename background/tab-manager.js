@@ -37,7 +37,7 @@ export async function announceManaged(tabId) {
   }
 }
 
-async function pinQualityForTab(tabId) {
+export async function pinQualityForTab(tabId) {
   let tab;
   try {
     tab = await chrome.tabs.get(Number(tabId));

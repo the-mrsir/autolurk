@@ -42,6 +42,7 @@ import {
 import { NOTIFICATION_BUTTONS } from "./notifications.js";
 import { runMigrations } from "./migrations.js";
 import { recordSevenTvExtension } from "./seventv.js";
+import { rotateServerStreams } from "./server-rotation.js";
 import { noteStreakTabClosed, scanWatchStreaks, stopWatchStreaks, tickWatchStreaks } from "./streaks.js";
 import { checkForUpdate } from "./updates.js";
 import {
@@ -204,6 +205,9 @@ async function alarmSpecs() {
     // Unpacked copies do not update themselves. This only looks. The dashboard
     // button is what replaces the folder.
     { name: ALARMS.UPDATE_CHECK, options: { delayInMinutes: 10, periodInMinutes: 720 } },
+    // One stream every two minutes. The handler does nothing until Server
+    // rotation is turned on.
+    { name: ALARMS.SERVER_ROTATE, options: { delayInMinutes: 2, periodInMinutes: 2 } },
   ];
 }
 
@@ -261,6 +265,10 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         return;
       case ALARMS.UPDATE_CHECK:
         await checkForUpdate().catch((error) => console.warn("Update check failed", error));
+        return;
+      case ALARMS.SERVER_ROTATE:
+        await rotateServerStreams().catch((error) => console.warn("Server rotation failed", error));
+        await buildSnapshot();
         return;
       case ALARMS.SYNC_FOLLOWS:
         await runFollowSyncAlarm();

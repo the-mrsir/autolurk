@@ -9,6 +9,7 @@ export const ALARMS = {
   DEVICE_POLL: "device-poll",
   STREAK_CHECK: "streak-check",
   UPDATE_CHECK: "update-check",
+  SERVER_ROTATE: "server-rotate",
 };
 
 // Bumped whenever stored data needs reshaping. See background/migrations.js.
@@ -28,6 +29,9 @@ export const SESSION_KEYS = {
   // Watch-streak recovery tabs. The browser session is the right lifetime:
   // a recovery video does not need to resume after Chrome restarts.
   STREAK: "streakRecovery",
+  // Which stream the server rotation opened last. Session lifetime matches a
+  // run of Chrome; a fresh browser starts the cycle at the beginning.
+  SERVER: "serverRotation",
 };
 
 export const STORAGE_KEYS = {
@@ -248,6 +252,9 @@ export const DEFAULT_SETTINGS = {
   // Per computer. A laptop and a desktop do not want the same decode size.
   backgroundQuality: "160p30",
   watchingQuality: "1080p60",
+  // A machine left running as a server. Every two minutes the next managed
+  // stream is opened and checked. Off on a computer someone is using.
+  serverRotation: false,
   // A public GitHub repository, or a JSON file { version, packageUrl }.
   // Blank uses this repository. Chrome does not update an unpacked folder on its own.
   updateManifestUrl: "https://github.com/the-mrsir/autolurk",

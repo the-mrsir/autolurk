@@ -54,6 +54,7 @@ export const UNSYNCED_SETTINGS = new Set([
   "syncGroup",
   "backgroundQuality",
   "watchingQuality",
+  "serverRotation",
 ]);
 
 // A tombstone is kept this long. It only has to outlive the longest realistic

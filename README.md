@@ -13,6 +13,7 @@ Connect Twitch from the dashboard. Sign in on each computer. The Twitch login is
 ## What you get
 
 - Live favorites open as background tabs in one **AutoLurk** group. The tab you are using stays in front, unless **Open streams in front** is set to favorites or all.
+- **Server rotation** opens the next stream every 2 minutes, reloads it if it is not playing, and checks again. It stays on this computer.
 - The player stays unmuted. The Chrome tab is muted.
 - Background tabs and the stream you are looking at each have a quality setting. They start at 160p and 1080p.
 - Tabs close when the stream ends or raids away. A tab you close yourself stays closed until the next broadcast.
