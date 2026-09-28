@@ -4,9 +4,9 @@ Chrome extension that keeps favorite Twitch streams open in the background.
 
 ## Install
 
-1. Open `chrome://extensions`
-2. Turn on **Developer mode**
-3. **Load unpacked** and select this folder
+1. On the GitHub page, click **Code**, then **Download ZIP**
+2. Unzip it. Open the folder inside (the one that contains `manifest.json`)
+3. Open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and select that folder
 
 Connect Twitch from the dashboard. Sign in on each computer. The Twitch login is not synced.
 
