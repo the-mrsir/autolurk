@@ -1,4 +1,5 @@
 import { MESSAGE } from "../shared/constants.js";
+import { checkForUpdate } from "../background/updates.js";
 import { describeUpdate } from "../shared/update-logic.js";
 import { allowUpdateOrigin, installUpdatePackage } from "./update-client.js";
 import {
@@ -870,7 +871,9 @@ $("checkUpdateBtn").addEventListener("click", async () => {
   $("updateStatus").textContent = "Checking…";
   try {
     if (url) await allowUpdateOrigin(url);
-    await send(MESSAGE.CHECK_UPDATE, { url });
+    // Run here, not in the service worker. The worker keeps the script it
+    // started with, so a fix on disk would not run until Chrome restarted it.
+    await checkForUpdate(url);
     state.settingsDirty = false;
     await refresh();
   } catch (error) {

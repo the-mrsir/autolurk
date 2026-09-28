@@ -27,9 +27,10 @@ async function originAllowed(url) {
 }
 
 async function fetchJson(url) {
+  // Chrome refuses a custom User-Agent and throws before the request is sent.
   const response = await fetch(url, {
     cache: "no-store",
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "AutoLurk" },
+    headers: { Accept: "application/vnd.github+json" },
   });
   if (!response.ok) {
     const error = new Error(`The update address returned ${response.status}.`);

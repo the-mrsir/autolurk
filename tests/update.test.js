@@ -167,8 +167,9 @@ describe("extension updates", () => {
     mock.chrome.runtime.getManifest = () => ({ version: "1.2.6", name: "AutoLurk Companion" });
     const original = globalThis.fetch;
     const seen = [];
-    globalThis.fetch = async (url) => {
+    globalThis.fetch = async (url, options) => {
       seen.push(String(url));
+      assert.equal(options?.headers?.["User-Agent"], undefined);
       if (String(url).includes("api.github.com")) {
         return { ok: true, status: 200, url, json: async () => ({ default_branch: "main" }) };
       }
