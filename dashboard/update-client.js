@@ -16,9 +16,22 @@ const PICKER_PAGE = "https://example.com/";
 // Runs as a classic script on the https page, which is the only place
 // showDirectoryPicker exists. It reads its instructions from the DOM because
 // that is shared with the extension; the folder handle is not.
-export function pickerBoot() {
-  if (document.getElementById("autolurk-update")) return;
-  const expected = JSON.parse(document.documentElement.dataset.autolurkExpected || "{}");
+export function pickerBoot(expected) {
+  if (expected && typeof expected === "object" && expected.name) {
+    document.documentElement.dataset.autolurkExpected = JSON.stringify({
+      name: String(expected.name),
+      key: String(expected.key || ""),
+      version: String(expected.version || ""),
+    });
+  }
+  // A half-built overlay has no picker flag. Remove it and build a complete one.
+  // An overlay the user is already looking at is left alone.
+  if (document.getElementById("autolurk-update")) {
+    if (document.documentElement.dataset.autolurkPicker) return;
+    document.getElementById("autolurk-update").remove();
+    document.getElementById("autolurk-job")?.remove();
+  }
+  expected = JSON.parse(document.documentElement.dataset.autolurkExpected || "{}");
   const root = document.createElement("div");
   root.id = "autolurk-update";
   root.style.cssText =
@@ -91,6 +104,7 @@ export function pickerBoot() {
 
   button.addEventListener("click", async () => {
     button.disabled = true;
+    status.dataset.autolurkPicking = "1";
     status.textContent = "Waiting for the folder…";
     delete status.dataset.autolurkError;
     try {
@@ -113,7 +127,9 @@ export function pickerBoot() {
         status.textContent = "Choose the AutoLurk folder to continue.";
         return;
       }
-      fail(error.message || "The folder could not be opened.");
+      status.textContent = error.message || "The folder could not be opened.";
+    } finally {
+      delete status.dataset.autolurkPicking;
     }
   });
 }
@@ -173,23 +189,11 @@ function tabLoaded(tabId) {
   });
 }
 
-function startPicker(expected, source) {
-  document.documentElement.dataset.autolurkExpected = JSON.stringify(expected);
-  if (document.getElementById("autolurk-update")) return;
-  const inline = document.createElement("script");
-  inline.textContent = source;
-  document.documentElement.append(inline);
-  if (!document.documentElement.dataset.autolurkPicker) {
-    const script = document.createElement("script");
-    script.src = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    document.documentElement.append(script);
-  }
-}
-
 function readPickerState() {
   const status = document.getElementById("autolurk-update-status");
   return {
     ready: document.documentElement.dataset.autolurkPicker || "",
+    picking: status?.dataset.autolurkPicking || "",
     picked: status?.dataset.autolurkPicked || "",
     error: status?.dataset.autolurkError || "",
   };
@@ -218,12 +222,9 @@ async function onPage(tabId, func, args) {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const [result] = await chrome.scripting.executeScript({
-        target: { tabId },
-        world: "MAIN",
-        func,
-        args,
-      });
+      const details = { target: { tabId }, world: "MAIN", func };
+      if (Array.isArray(args)) details.args = args;
+      const [result] = await chrome.scripting.executeScript(details);
       return result?.result;
     } catch (error) {
       lastError = error;
@@ -235,43 +236,49 @@ async function onPage(tabId, func, args) {
 
 async function pickerState(tabId) {
   try {
-    return (await onPage(tabId, readPickerState)) || { ready: "", picked: "", error: "" };
+    return (await onPage(tabId, readPickerState)) || { ready: "", picking: "", picked: "", error: "" };
   } catch {
     throw new Error("The folder page was closed before the update finished.");
   }
 }
 
-async function installViaPage(files, expected) {
+async function installViaPage(files, expected, onStatus) {
   const tab = await chrome.tabs.create({ url: PICKER_PAGE, active: true });
+  if (tab.windowId != null) await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
   await tabLoaded(tab.id);
-  const source = `(${pickerBoot.toString()})()`;
-  await onPage(tab.id, startPicker, [expected, source]);
+  await onPage(tab.id, pickerBoot, [expected]).catch(() => {});
+  onStatus("Choose the AutoLurk folder in the tab that opened. Leave that tab open.");
 
   const started = Date.now();
   let picked = false;
   while (Date.now() - started < 5 * 60 * 1000) {
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    let state = await pickerState(tab.id);
-    if (!state.ready && Date.now() - started > 1500) {
-      await onPage(tab.id, pickerBoot);
-      state = await pickerState(tab.id);
+    const state = await pickerState(tab.id);
+    // The folder dialog is open. Injecting again would rebuild the page under it.
+    if (state.picking) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      continue;
     }
-    if (!state.ready && Date.now() - started > 3000) {
-      await chrome.tabs.remove(tab.id).catch(() => {});
-      throw new Error("The folder picker did not start.");
+    if (state.ready && state.ready !== "function") {
+      throw new Error(state.error || "This page cannot choose a folder.");
     }
-    if (state.error) {
-      await chrome.tabs.remove(tab.id).catch(() => {});
-      throw new Error(state.error);
+    if (state.ready !== "function") {
+      try {
+        await onPage(tab.id, pickerBoot, [expected]);
+      } catch {
+        // The document can still be navigating. The next pass tries again.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      continue;
     }
     if (state.picked) {
       picked = true;
       break;
     }
+    await new Promise((resolve) => setTimeout(resolve, 400));
   }
   if (!picked) {
     await chrome.tabs.remove(tab.id).catch(() => {});
-    throw new Error("The update was not finished.");
+    throw new Error("The folder was not chosen. Click Update again and leave the folder tab open until you choose it.");
   }
 
   let jobId = 1;
@@ -322,7 +329,7 @@ async function downloadPackage(packageUrl) {
 }
 
 // Downloads the package and replaces the loaded folder. The caller reloads.
-export async function installUpdatePackage(packageUrl) {
+export async function installUpdatePackage(packageUrl, onStatus = () => {}) {
   // First wait, so the click still counts. Both strings are the ones listed
   // in the manifest. A GitHub-specific origin is not, and requesting one is
   // what produced "Only permissions specified in the manifest may be requested."
@@ -338,10 +345,15 @@ export async function installUpdatePackage(packageUrl) {
   }
   if (!allowed) throw new Error("Chrome did not allow the folder page.");
 
+  onStatus("Downloading the update…");
   const { files, next, running } = await downloadPackage(packageUrl);
-  return installViaPage(files, {
-    name: running.name,
-    key: running.key || "",
-    version: next.version,
-  });
+  return installViaPage(
+    files,
+    {
+      name: running.name,
+      key: running.key || "",
+      version: next.version,
+    },
+    onStatus
+  );
 }

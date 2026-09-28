@@ -895,7 +895,9 @@ $("applyUpdateBtn").addEventListener("click", async () => {
   $("applyUpdateBtn").disabled = true;
   $("updateStatus").textContent = "Downloading the update…";
   try {
-    const version = await installUpdatePackage(packageUrl);
+    const version = await installUpdatePackage(packageUrl, (message) => {
+      $("updateStatus").textContent = message;
+    });
     $("updateStatus").textContent = `Version ${version} is in place. Reloading…`;
     chrome.runtime.reload();
   } catch (error) {
