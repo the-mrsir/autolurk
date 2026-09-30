@@ -38,7 +38,7 @@ export function normalizeWatchdog(input = {}) {
   return {
     enabled: input.enabled === true,
     endpoint: parseLoopbackEndpoint(input.endpoint),
-    token: String(input.token || "").slice(0, 256),
+    token: String(input.token || "").replace(/[\r\n]/g, "").trim().slice(0, 256),
     intervalSeconds: Math.min(3600, Math.max(60, Number.isFinite(interval) ? Math.round(interval) : 60)),
     recover: input.recover === true,
     lastAt: Number(input.lastAt) > 0 ? Number(input.lastAt) : 0,
@@ -84,11 +84,18 @@ export function watchdogStatusText(config, now = Date.now()) {
   return "The monitor could not be reached.";
 }
 
+// Unix seconds. A millisecond count is decades past a clock that uses time.time().
+function reportInstant(at) {
+  const value = Number(at) || 0;
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value > 10_000_000_000 ? value / 1000 : value);
+}
+
 export function heartbeatPayload({ version = "", managed = 0, playing = 0, stalled = 0, at = 0 } = {}) {
   return {
     extension: "autolurk",
     version: String(version || ""),
-    at: Number(at) || 0,
+    at: reportInstant(at),
     managed: Math.max(0, Number(managed) || 0),
     playing: Math.max(0, Number(playing) || 0),
     stalled: Math.max(0, Number(stalled) || 0),
@@ -124,11 +131,29 @@ export function sanitizeWatchdogText(value) {
 function replyMessage(body) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return "";
   if (typeof body.message === "string") return sanitizeWatchdogText(body.message);
+  if (typeof body.error === "string") return sanitizeWatchdogText(body.error);
   if (typeof body.detail === "string") return sanitizeWatchdogText(body.detail);
+  if (body.detail && typeof body.detail === "object" && !Array.isArray(body.detail)) {
+    return replyMessage(body.detail);
+  }
   if (Array.isArray(body.detail)) {
-    return sanitizeWatchdogText(body.detail.map((item) => item?.msg || "").filter(Boolean).join("; "));
+    return sanitizeWatchdogText(body.detail.map((item) => item?.msg || item?.message || "").filter(Boolean).join("; "));
   }
   return "";
+}
+
+export function watchdogRefusalDetail(body, rawText = "", status = 0) {
+  const fromJson = replyMessage(body);
+  if (fromJson) return fromJson;
+  const text = String(rawText || "");
+  const message = text.match(/Message:\s*([^<\n]+)/i);
+  if (message) {
+    const extracted = sanitizeWatchdogText(message[1]);
+    if (extracted && !/^bad request\.?$/i.test(extracted)) return extracted;
+  }
+  const plain = sanitizeWatchdogText(text);
+  if (plain && !/^doctype html/i.test(plain) && !/^<!?doctype/i.test(plain)) return plain;
+  return String(status || "");
 }
 
 // The monitor's own status page is { status, message }, not { ok: true }.

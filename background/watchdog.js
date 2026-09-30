@@ -10,6 +10,7 @@ import {
   loopbackPermissionPattern,
   normalizeWatchdog,
   readWatchdogReply,
+  watchdogRefusalDetail,
   streamCounts,
   watchdogFormState,
   watchdogPeriodMinutes,
@@ -120,8 +121,14 @@ export async function runWatchdogHeartbeat() {
   }
 
   let body = null;
+  let raw = "";
   try {
-    body = typeof response.json === "function" ? await response.json() : null;
+    if (typeof response.text === "function") {
+      raw = await response.text();
+      body = raw ? JSON.parse(raw) : null;
+    } else if (typeof response.json === "function") {
+      body = await response.json();
+    }
   } catch {
     body = null;
   }
@@ -131,7 +138,7 @@ export async function runWatchdogHeartbeat() {
       await note(config, {
         lastOk: false,
         lastError: "rejected",
-        lastDetail: reply.detail || String(response.status || ""),
+        lastDetail: reply.detail || watchdogRefusalDetail(body, raw, response.status),
       })
     );
   }

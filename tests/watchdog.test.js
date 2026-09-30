@@ -4,6 +4,7 @@ import { chromeMock } from "./chrome-mock.js";
 import { HEALTH } from "../shared/health.js";
 import {
   heartbeatPayload,
+  watchdogRefusalDetail,
   normalizeWatchdog,
   parseLoopbackEndpoint,
   readWatchdogReply,
@@ -57,6 +58,16 @@ describe("local monitor decisions", () => {
     assert.equal(serialized.includes("token"), false);
     assert.equal(body.managed, 4);
     assert.equal(body.playing, 3);
+    assert.equal(body.at, 10);
+    assert.equal(heartbeatPayload({ at: 1_759_235_520_000 }).at, 1_759_235_520);
+    assert.equal(
+      watchdogRefusalDetail({ error: "missing streams" }, "", 400),
+      "missing streams"
+    );
+    assert.equal(
+      watchdogRefusalDetail(null, "<html><p>Message: expected unix time</p></html>", 400),
+      "expected unix time"
+    );
   });
 
   it("recovers a stalled stream only when this install asked for that", () => {
