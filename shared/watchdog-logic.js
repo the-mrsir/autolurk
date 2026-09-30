@@ -2,7 +2,7 @@
 // A report is sent only after this install turns the monitor on, and only to
 // loopback. Nothing here is a default destination.
 
-import { HEALTH } from "./health.js";
+import { HEALTH, HEALTH_TIMING } from "./health.js";
 
 export const LOOPBACK_PATTERNS = [
   "http://127.0.0.1/*",
@@ -84,35 +84,15 @@ export function watchdogStatusText(config, now = Date.now()) {
   return "The monitor could not be reached.";
 }
 
-// Unix seconds. A millisecond count is decades past a clock that uses time.time().
-function reportInstant(at) {
-  const value = Number(at) || 0;
-  if (!Number.isFinite(value) || value <= 0) return 0;
-  return Math.floor(value > 10_000_000_000 ? value / 1000 : value);
-}
-
 export function heartbeatPayload({ version = "", managed = 0, playing = 0, stalled = 0, at = 0 } = {}) {
+  const instant = Number(at);
   return {
     extension: "autolurk",
     version: String(version || ""),
-    at: reportInstant(at),
+    at: Number.isFinite(instant) && instant > 0 ? Math.floor(instant) : 0,
     managed: Math.max(0, Number(managed) || 0),
     playing: Math.max(0, Number(playing) || 0),
     stalled: Math.max(0, Number(stalled) || 0),
-  };
-}
-
-// The status page speaks { status, message }. A report that includes those
-// fields is the second attempt when the first body is refused.
-export function heartbeatStatusPayload(payload = {}) {
-  return {
-    status: "OK",
-    message: "autolurk",
-    version: String(payload.version || ""),
-    at: reportInstant(payload.at),
-    managed: Math.max(0, Number(payload.managed) || 0),
-    playing: Math.max(0, Number(payload.playing) || 0),
-    stalled: Math.max(0, Number(payload.stalled) || 0),
   };
 }
 
@@ -156,29 +136,17 @@ function replyMessage(body) {
   return "";
 }
 
-function usefulRefusalLine(value) {
-  const text = sanitizeWatchdogText(String(value || "").replace(/^\s*message:\s*/i, ""));
-  if (!text) return "";
-  if (/^bad request\.?$/i.test(text)) return "";
-  if (/^error response$/i.test(text)) return "";
-  if (/^error code: 400$/i.test(text)) return "";
-  if (/^doctype html/i.test(text)) return "";
-  return text;
-}
-
 export function watchdogRefusalDetail(body, rawText = "", status = 0) {
-  const fromJson = usefulRefusalLine(replyMessage(body));
+  const fromJson = replyMessage(body);
   if (fromJson) return fromJson;
   const text = String(rawText || "");
-  const paragraphs = [...text.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
-    .map((match) => usefulRefusalLine(match[1].replace(/<[^>]+>/g, " ")))
-    .filter(Boolean);
-  if (paragraphs.length) return paragraphs[paragraphs.length - 1];
   const message = text.match(/Message:\s*([^<\n]+)/i);
-  const extracted = message ? usefulRefusalLine(message[1]) : "";
-  if (extracted) return extracted;
-  const plain = usefulRefusalLine(text);
-  if (plain) return plain;
+  if (message) {
+    const extracted = sanitizeWatchdogText(message[1]);
+    if (extracted && !/^bad request\.?$/i.test(extracted)) return extracted;
+  }
+  const plain = sanitizeWatchdogText(text);
+  if (plain && !/^doctype html/i.test(plain) && !/^<!?doctype/i.test(plain)) return plain;
   return String(status || "");
 }
 
@@ -201,17 +169,35 @@ export function readWatchdogReply(body, httpOk = true) {
     status === "failed";
   return {
     ok: !failed,
-    recover: body.recover === true,
+    recover: replyAsksRecovery(body),
     notify,
     detail: failed ? detail : "",
   };
 }
 
-export function watchdogRecoveryTarget(config, reply, managed = {}) {
+// The monitor asks by status. STREAM_WARNING is the one it returns when the
+// report's streams are stalled. An explicit recover:false still wins.
+const RECOVERY_STATUSES = new Set(["stream_warning", "stream_failed", "stalled"]);
+
+function replyAsksRecovery(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return false;
+  if (body.recover === false) return false;
+  if (body.recover === true) return true;
+  return RECOVERY_STATUSES.has(String(body.status || "").toLowerCase());
+}
+
+export function watchdogRecoveryTarget(config, reply, managed = {}, now = Date.now()) {
   if (!config?.enabled || !config?.recover || reply?.recover !== true) return null;
-  const entry = Object.values(managed).find(
-    (item) => item && (item.health === HEALTH.STALLED || item.health === HEALTH.FAILED)
-  );
+  const entry = Object.values(managed).find((item) => {
+    if (!item) return false;
+    const unhealthy =
+      item.health === HEALTH.STALLED ||
+      item.health === HEALTH.FAILED ||
+      item.health === HEALTH.DEGRADED;
+    if (!unhealthy) return false;
+    if (item.healthReason === "background player temporarily unavailable") return false;
+    return now - Number(item.lastRecoveryAt || 0) >= HEALTH_TIMING.recoveryCooldownMs;
+  });
   const tabId = Number(entry?.tabId);
   return Number.isFinite(tabId) ? tabId : null;
 }

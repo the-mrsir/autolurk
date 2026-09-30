@@ -4,7 +4,6 @@ import { chromeMock } from "./chrome-mock.js";
 import { HEALTH } from "../shared/health.js";
 import {
   heartbeatPayload,
-  heartbeatStatusPayload,
   watchdogRefusalDetail,
   normalizeWatchdog,
   parseLoopbackEndpoint,
@@ -60,16 +59,7 @@ describe("local monitor decisions", () => {
     assert.equal(body.managed, 4);
     assert.equal(body.playing, 3);
     assert.equal(body.at, 10);
-    assert.equal(heartbeatPayload({ at: 1_759_235_520_000 }).at, 1_759_235_520);
-    const shaped = heartbeatStatusPayload(body);
-    assert.equal(shaped.status, "OK");
-    assert.equal(shaped.extension, undefined);
-    assert.equal(shaped.at, 10);
-    const page = "<!DOCTYPE HTML><html><body><p>Error code: 400</p><p>Error code explanation: 400 - Bad request syntax or unsupported method.</p></body></html>";
-    assert.equal(
-      watchdogRefusalDetail(null, page, 400),
-      "Error code explanation: 400 - Bad request syntax or unsupported method."
-    );
+    assert.equal(heartbeatPayload({ at: 1_790_772_771_003 }).at, 1_790_772_771_003);
     assert.equal(
       watchdogRefusalDetail({ error: "missing streams" }, "", 400),
       "missing streams"
@@ -118,6 +108,23 @@ describe("local monitor decisions", () => {
         { "7": { tabId: 7, health: HEALTH.MEDIA_PLAYING } }
       ),
       null
+    );
+    const warning = readWatchdogReply(
+      { status: "STREAM_WARNING", report: { playing: 0, stalled: 4 } },
+      true
+    );
+    assert.equal(warning.ok, true);
+    assert.equal(warning.recover, true);
+    assert.equal(
+      watchdogRecoveryTarget({ enabled: true, recover: false }, warning, managed),
+      null
+    );
+    assert.equal(
+      watchdogRecoveryTarget({ enabled: true, recover: true }, warning, {
+        "7": { tabId: 7, health: HEALTH.STALLED, lastRecoveryAt: Date.now() },
+        "8": { tabId: 8, health: HEALTH.FAILED, lastRecoveryAt: 0 },
+      }),
+      8
     );
   });
 });
@@ -189,36 +196,6 @@ describe("local monitor runtime", () => {
       });
       assert.equal(kept.hasToken, true);
       assert.equal(mock.local.watchdog.token, "monitor-secret");
-    } finally {
-      globalThis.fetch = original;
-    }
-  });
-
-  it("tries the status shape when the first report is refused", async () => {
-    mock.reset({ storage: { settings: { automationEnabled: false }, managedTabs: {} } });
-    await mock.chrome.permissions.request({ origins: ["http://127.0.0.1/*"] });
-    const bodies = [];
-    const original = globalThis.fetch;
-    globalThis.fetch = async (_url, init) => {
-      bodies.push(JSON.parse(init.body));
-      if (bodies.length === 1) return { ok: false, status: 400, text: async () => "" };
-      return { ok: true, status: 200, text: async () => JSON.stringify({ status: "OK", message: "stored" }) };
-    };
-    try {
-      const { saveWatchdogSettings } = await import("../background/watchdog.js");
-      const form = await saveWatchdogSettings({
-        enabled: true,
-        endpoint: "http://127.0.0.1:8765/heartbeat",
-        token: "monitor-secret",
-        tokenSet: true,
-        intervalSeconds: 60,
-        recover: false,
-      });
-      assert.equal(bodies.length, 2);
-      assert.equal(bodies[0].extension, "autolurk");
-      assert.equal(bodies[1].status, "OK");
-      assert.equal(bodies[1].extension, undefined);
-      assert.equal(form.lastOk, true);
     } finally {
       globalThis.fetch = original;
     }
