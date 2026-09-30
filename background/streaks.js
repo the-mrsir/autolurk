@@ -269,6 +269,14 @@ async function advance(active, settings) {
     return;
   }
 
+  // The video already qualified. Later ticks only ask Twitch whether the
+  // expiration cleared, and must not throw the attempt away because the clip
+  // has since ended.
+  if (active.playedAt) {
+    await confirmPlayed(active, settings);
+    return;
+  }
+
   const progress = await chrome.tabs
     .sendMessage(active.tabId, { type: MESSAGE.STREAK_PROGRESS })
     .catch(() => null);
@@ -292,6 +300,10 @@ async function advance(active, settings) {
     return;
   }
 
+  await confirmPlayed(active, settings, verdict.phase);
+}
+
+async function confirmPlayed(active, settings, phase = active.phase) {
   let cleared = false;
   try {
     const [payload] = await postGql(active.tabId, [rewardListOperation(active.userId)]);
@@ -316,7 +328,18 @@ async function advance(active, settings) {
     return;
   }
 
-  if (!active.triedVod && active.vodUrl && verdict.phase !== "vod") {
+  const playedAt = Number(active.playedAt) || 0;
+  if (!playedAt) {
+    await session((current) => {
+      if (Number(current.active?.tabId) !== Number(active.tabId)) return undefined;
+      current.active = { ...current.active, playedAt: Date.now(), phase: phase || current.active.phase };
+      return current;
+    });
+    return;
+  }
+  if (Date.now() - playedAt < STREAK_TIMING.confirmMs) return;
+
+  if (!active.triedVod && active.vodUrl && phase !== "vod") {
     await finish(active, "", "");
     await session((current) => {
       current.queue.unshift({

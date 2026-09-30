@@ -174,6 +174,12 @@ describe("watch streak decisions", () => {
       1_000 + 2000
     );
     assert.equal(ready.action, "recheck");
+    const already = judgeRecovery(
+      job,
+      { url: job.openedUrl, hasVideo: true, readyState: 4, currentTime: 0, maxTime: 12, ended: true },
+      1_000 + 70_000
+    );
+    assert.equal(already.action, "recheck");
   });
 
   it("does not call a video that never started a recovery", () => {
@@ -234,6 +240,14 @@ describe("watch streak recovery", () => {
 
       const text = await activityText();
       assert.ok(!text.includes("Watch streak for Aztecross recovered."), text);
+      const waiting = await recoveryTabs();
+      assert.equal(waiting.length, 1);
+      assert.ok(waiting[0].url.endsWith("/clip/right-old"), waiting[0].url);
+
+      const stored = await getSessionValue(SESSION_KEYS.STREAK, null);
+      stored.active.playedAt = Date.now() - STREAK_TIMING.confirmMs - 1000;
+      await setSessionValue(SESSION_KEYS.STREAK, stored);
+      await tickWatchStreaks();
       const opened = await recoveryTabs();
       assert.equal(opened.length, 1);
       assert.equal(opened[0].url, "https://www.twitch.tv/videos/99");

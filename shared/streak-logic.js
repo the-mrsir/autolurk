@@ -20,6 +20,8 @@ export const STREAK_TIMING = {
   // A hidden tab that never receives a media source stays at readyState 0.
   // Waiting longer does not change that.
   neverStartedMs: 2 * 60 * 1000,
+  // Twitch keeps showing the expiration for a while after the video has played.
+  confirmMs: 3 * 60 * 1000,
   redirectWaitMs: 20 * 1000,
   vodCapMs: 8 * 60 * 1000,
   clipCapMs: 90 * 1000,
@@ -203,9 +205,10 @@ export function judgeRecovery(job, progress, now, pageUrl = "") {
   }
 
   const time = Number(progress.currentTime);
-  const current = Number.isFinite(time) ? time : 0;
+  const seen = Number(progress.maxTime);
+  const current = Math.max(Number.isFinite(time) ? time : 0, Number.isFinite(seen) ? seen : 0);
   const ready = Number(progress.readyState) || 0;
-  const playing = Boolean(progress.hasVideo) && (ready > 0 || current > 0);
+  const playing = Boolean(progress.hasVideo) && (ready > 0 || current > 0 || progress.ended === true);
   if (!playing) {
     if (elapsed >= STREAK_TIMING.neverStartedMs) return { action: "never-started", phase };
     return hold();
@@ -213,7 +216,11 @@ export function judgeRecovery(job, progress, now, pageUrl = "") {
 
   const needed = phase === "vod" ? STREAK_TIMING.vodPlaySeconds : STREAK_TIMING.clipPlaySeconds;
   const cap = phase === "vod" ? STREAK_TIMING.vodCapMs : STREAK_TIMING.clipCapMs;
+  // The health check looks about once a minute. A clip has usually finished by
+  // then, so the position already reached is the play time, not a baseline.
+  const playedEnough = current >= needed || (progress.ended === true && phase === "clip");
   if (job?.baselineTime == null) {
+    if (playedEnough) return { action: "recheck", phase, baselineTime: current };
     if (elapsed >= cap) return { action: "never-started", phase };
     return hold({ baselineTime: current });
   }

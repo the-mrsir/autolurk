@@ -32,18 +32,24 @@
     return best;
   }
 
+  let maxTime = 0;
+
   function progress() {
     const video = siteVideo();
     // play() on an element that already has a source is the same nudge the
     // lurk player uses. An element with no source cannot be started from here,
     // and clicking around the page is what removed the channel player before.
-    if (video && video.paused && video.readyState > 0) {
+    if (video && video.paused && video.readyState > 0 && !video.ended) {
       video.play().catch(() => {});
     }
+    const currentTime = video ? Number(video.currentTime) || 0 : 0;
+    if (currentTime > maxTime) maxTime = currentTime;
     return {
       url: location.href,
       hasVideo: Boolean(video),
-      currentTime: video ? Number(video.currentTime) || 0 : 0,
+      currentTime,
+      maxTime,
+      ended: Boolean(video?.ended),
       readyState: video ? Number(video.readyState) || 0 : 0,
       paused: video ? Boolean(video.paused) : true,
     };
