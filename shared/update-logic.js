@@ -102,23 +102,11 @@ export function parseUpdateManifest(body) {
   return { version, packageUrl: url.toString() };
 }
 
-const UPDATER_ORIGIN = "https://the-mrsir.github.io";
-
-export function isUpdaterReload(message, sender) {
-  if (message?.type !== "autolurk-reload") return false;
-  if (sender?.origin === UPDATER_ORIGIN) return true;
-  try {
-    return new URL(String(sender?.url || "")).origin === UPDATER_ORIGIN;
-  } catch {
-    return false;
-  }
-}
-
 export function describeUpdate(update, manifestUrl) {
   if (!String(manifestUrl || "").trim()) return "Add an update address, then check.";
   if (update?.error) return update.error;
   if (update?.packageUrl && update?.availableVersion) {
-    return `Version ${update.availableVersion} is ready.`;
+    return `Version ${update.availableVersion} is on GitHub. Chrome cannot write it into a folder load.`;
   }
   if (update?.checkedAt && update?.latestVersion) {
     return `You're on the latest version (${update.latestVersion}).`;

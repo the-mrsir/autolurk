@@ -306,11 +306,10 @@
         <section id="updates" class="set-block">
           <h2>Updates</h2>
           <p class="meta">
-            Chrome does not update an extension loaded from a folder. Check reads the GitHub
-            repository. When that version is higher, Update opens a page. On that page, choose
-            the folder you loaded on chrome://extensions, the one that contains
-            <code>manifest.json</code>. The first Check lets Chrome reach GitHub. If AutoLurk
-            does not reload itself, click Reload on chrome://extensions.
+            Chrome does not update an extension loaded from a folder, and it will not let a
+            page write into that folder. Check reads the GitHub repository. When that version
+            is higher, pull this folder if it is the git checkout, or replace the folder, then
+            click Reload on chrome://extensions. The first Check lets Chrome reach GitHub.
           </p>
           <p class="meta">
             To publish an update, raise the version in <code>manifest.json</code> and push.
@@ -323,7 +322,6 @@
           <p id="updateStatus" class="meta">Not checked yet.</p>
           <div class="inline">
             <button id="checkUpdateBtn" type="button">Check for updates</button>
-            <button id="applyUpdateBtn" class="primary hidden" type="button">Update</button>
           </div>
         </section>
 

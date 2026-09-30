@@ -1,5 +1,4 @@
 import { ALARMS, GROUP_NAME, MESSAGE, PUBLIC_SCALE, SESSION_KEYS, qualityMessage } from "../shared/constants.js";
-import { isUpdaterReload } from "../shared/update-logic.js";
 import { startupPollNeedsRetry } from "../shared/poll-logic.js";
 import { makeSyncGroup, normalizeSyncGroup } from "../shared/sync-logic.js";
 import { HEALTH } from "../shared/health.js";
@@ -114,12 +113,6 @@ chrome.runtime.onInstalled.addListener(() => {
   const pending = initialize({ reset: true });
   pending.catch((error) => console.warn("Install init failed", error));
   return pending;
-});
-
-chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-  if (!isUpdaterReload(message, sender)) return;
-  sendResponse({ ok: true });
-  chrome.runtime.reload();
 });
 
 chrome.runtime.onStartup.addListener(() => {

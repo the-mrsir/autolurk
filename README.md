@@ -36,7 +36,7 @@ Chrome will not update an extension loaded from a folder.
 
 **Settings → Updates** is pointed at https://github.com/the-mrsir/autolurk. Click **Check for updates** once so Chrome can reach GitHub. After that it checks about twice a day.
 
-When the repo version is higher, **Update** opens https://the-mrsir.github.io/autolurk/updater.html. Choose the folder that contains `manifest.json`. If AutoLurk does not reload itself, click Reload on chrome://extensions.
+When the repo version is higher, pull this folder if it is the git checkout, or replace the folder, then click Reload on chrome://extensions. Chrome will not write the files in for you.
 
 To publish an update, raise `version` in `manifest.json` and `package.json` and push.
 

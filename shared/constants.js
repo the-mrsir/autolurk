@@ -1,11 +1,6 @@
 export const EXTENSION_NAME = "AutoLurk Companion";
 export const GROUP_NAME = "AutoLurk";
 
-// A normal https page. Chrome does not give showDirectoryPicker to an
-// extension script, so Update opens this page and the page writes the folder.
-export const UPDATER_PAGE = "https://the-mrsir.github.io/autolurk/updater.html";
-export const UPDATER_ORIGIN = "https://the-mrsir.github.io";
-
 export const ALARMS = {
   POLL_LIVE: "poll-live",
   SYNC_FOLLOWS: "sync-follows",

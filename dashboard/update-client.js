@@ -1,4 +1,3 @@
-import { UPDATER_PAGE } from "../shared/constants.js";
 import { listedUpdateOrigins } from "../shared/update-logic.js";
 
 export async function allowUpdateOrigin() {
@@ -15,8 +14,4 @@ export async function allowUpdateOrigin() {
     throw new Error(error?.message || "Chrome did not allow the update download.");
   }
   if (!granted) throw new Error("Chrome did not allow the update download.");
-}
-
-export function openUpdater() {
-  return chrome.tabs.create({ url: UPDATER_PAGE, active: true });
 }

@@ -1,7 +1,7 @@
 import { MESSAGE } from "../shared/constants.js";
 import { checkForUpdate } from "../background/updates.js";
 import { describeUpdate } from "../shared/update-logic.js";
-import { allowUpdateOrigin, openUpdater } from "./update-client.js";
+import { allowUpdateOrigin } from "./update-client.js";
 import {
   compareFavorites,
   escapeHtml,
@@ -594,13 +594,6 @@ function renderUpdate(snap) {
     const installed = update.currentVersion ? `Installed ${update.currentVersion}. ` : "";
     status.textContent = `${installed}${describeUpdate(update, address)}`;
   }
-  const button = $("applyUpdateBtn");
-  if (button) {
-    const ready = Boolean(update.packageUrl && update.availableVersion);
-    button.classList.toggle("hidden", !ready);
-    button.disabled = !ready;
-    button.textContent = ready ? `Update to ${update.availableVersion}` : "Update";
-  }
 }
 
 function collectSettings() {
@@ -891,15 +884,6 @@ $("checkUpdateBtn").addEventListener("click", async () => {
   }
 });
 
-$("applyUpdateBtn").addEventListener("click", async () => {
-  $("updateStatus").textContent = "Choose the folder that contains manifest.json on the page that opened.";
-  try {
-    await openUpdater();
-  } catch (error) {
-    $("updateStatus").textContent = error.message;
-  }
-});
-
 $("saveSettingsBtn").addEventListener("click", async () => {
   $("saveSettingsBtn").disabled = true;
   try {
@@ -998,9 +982,7 @@ function revealUpdates() {
   setView("settings");
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
-      const button = $("applyUpdateBtn");
-      const target = button && !button.classList.contains("hidden") ? button : $("updates");
-      target?.scrollIntoView({ block: "center" });
+      $("updates")?.scrollIntoView({ block: "center" });
     });
   });
 }
