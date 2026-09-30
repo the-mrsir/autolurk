@@ -84,9 +84,27 @@ describe("evaluateHealth", () => {
     assert.equal(result.reason, "tab moved to someoneelse");
   });
 
-  it("calls a persistently muted player degraded rather than healthy", () => {
+  it("keeps a playing muted stream healthy after a reload drops the tab mute", () => {
     const result = evaluateHealth(
-      entry({ playerMuted: true, playerUnmutedAt: NOW - HEALTH_TIMING.mutedGraceMs - 1 }),
+      entry({
+        playerMuted: true,
+        muted: false,
+        mediaPlaying: true,
+        playerUnmutedAt: NOW - HEALTH_TIMING.mutedGraceMs - 1,
+      }),
+      {},
+      NOW
+    );
+    assert.equal(result.state, HEALTH.MEDIA_PLAYING);
+  });
+
+  it("calls a muted player that is not playing degraded", () => {
+    const result = evaluateHealth(
+      entry({
+        playerMuted: true,
+        mediaPlaying: false,
+        playerUnmutedAt: NOW - HEALTH_TIMING.mutedGraceMs - 1,
+      }),
       {},
       NOW
     );

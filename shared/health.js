@@ -109,9 +109,11 @@ export function evaluateHealth(entry = {}, tab = {}, now = Date.now(), timing = 
     return result(HEALTH.STALLED, entry.mediaPlaying ? "video froze" : "player is paused");
   }
 
-  // A player mute requested by AutoLurk is intentional and must not trigger a
-  // recovery loop. Only an unexpected player mute is degraded.
-  if (entry.playerMuted === true && !(entry.muted && !entry.userUnmuted)) {
+  // A background lurk tab stays player-muted so Chrome will keep decoding it.
+  // Unmuting without a click pauses the element. A reload also drops the
+  // Chrome tab mute, which used to make that intentional mute look like a stall.
+  const lurkMute = entry.mediaPlaying === true || (entry.muted && !entry.userUnmuted);
+  if (entry.playerMuted === true && !lurkMute) {
     const mutedFor = now - (entry.playerUnmutedAt || entry.lastVerifiedAt || 0);
     if (mutedFor > timing.mutedGraceMs) {
       return result(HEALTH.DEGRADED, "player is muted");
