@@ -54,7 +54,7 @@ export async function parkWatchdog() {
 }
 
 function note(config, patch) {
-  return saveWatchdogRecord({ ...config, ...patch, lastAt: Date.now() });
+  return saveWatchdogRecord({ ...config, lastDetail: "", ...patch, lastAt: Date.now() });
 }
 
 async function notifyLocal(message) {
@@ -121,13 +121,19 @@ export async function runWatchdogHeartbeat() {
 
   let body = null;
   try {
-    body = await response.json();
+    body = typeof response.json === "function" ? await response.json() : null;
   } catch {
     body = null;
   }
-  const reply = readWatchdogReply(body);
+  const reply = readWatchdogReply(body, response.ok);
   if (!response.ok || !reply.ok) {
-    return watchdogFormState(await note(config, { lastOk: false, lastError: "rejected" }));
+    return watchdogFormState(
+      await note(config, {
+        lastOk: false,
+        lastError: "rejected",
+        lastDetail: reply.detail || String(response.status || ""),
+      })
+    );
   }
 
   let notice = reply.notify;
@@ -141,7 +147,7 @@ export async function runWatchdogHeartbeat() {
     }
   }
   await notifyLocal(notice);
-  return watchdogFormState(await note(config, { lastOk: true, lastError: "" }));
+  return watchdogFormState(await note(config, { lastOk: true, lastError: "", lastDetail: "" }));
 }
 
 export async function saveWatchdogSettings(patch = {}) {

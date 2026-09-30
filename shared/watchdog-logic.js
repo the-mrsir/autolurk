@@ -44,6 +44,7 @@ export function normalizeWatchdog(input = {}) {
     lastAt: Number(input.lastAt) > 0 ? Number(input.lastAt) : 0,
     lastOk: input.lastOk === true,
     lastError,
+    lastDetail: sanitizeWatchdogText(input.lastDetail),
   };
 }
 
@@ -59,6 +60,7 @@ export function watchdogFormState(config) {
     lastAt: state.lastAt,
     lastOk: state.lastOk,
     lastError: state.lastError,
+    lastDetail: state.lastDetail,
   };
 }
 
@@ -74,7 +76,11 @@ export function watchdogStatusText(config, now = Date.now()) {
   if (state.lastError === "unauthorized") return "The monitor refused the token.";
   if (state.lastError === "permission") return "This browser has not allowed local access.";
   if (state.lastError === "address") return "The address has to be on this computer.";
-  if (state.lastError === "rejected") return "The monitor refused the report.";
+  if (state.lastError === "rejected") {
+    return state.lastDetail
+      ? `The monitor refused the report. ${state.lastDetail}`
+      : "The monitor refused the report.";
+  }
   return "The monitor could not be reached.";
 }
 
@@ -106,17 +112,47 @@ export function streamCounts(managed = {}) {
   return { managed: entries.length, playing, stalled };
 }
 
-export function readWatchdogReply(body) {
-  if (!body || typeof body !== "object") return { ok: false, recover: false, notify: "" };
-  const notify = String(body.notify || "")
-    .replace(/[^\w .,:'()-]/g, "")
+export function sanitizeWatchdogText(value) {
+  return String(value || "")
+    .replace(/bearer\s+\S+/gi, "")
+    .replace(/[^\w .,:'()-]/g, " ")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 140);
+}
+
+function replyMessage(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "";
+  if (typeof body.message === "string") return sanitizeWatchdogText(body.message);
+  if (typeof body.detail === "string") return sanitizeWatchdogText(body.detail);
+  if (Array.isArray(body.detail)) {
+    return sanitizeWatchdogText(body.detail.map((item) => item?.msg || "").filter(Boolean).join("; "));
+  }
+  return "";
+}
+
+// The monitor's own status page is { status, message }, not { ok: true }.
+// An empty 2xx body is a recorded report. status WAITING means it was not stored.
+export function readWatchdogReply(body, httpOk = true) {
+  const detail = replyMessage(body);
+  const notify = sanitizeWatchdogText(body?.notify || "");
+  if (!httpOk) return { ok: false, recover: false, notify: "", detail };
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: true, recover: false, notify: "", detail: "" };
+  }
+  const status = String(body.status || "").toLowerCase();
+  const failed =
+    body.ok === false ||
+    status === "error" ||
+    status === "rejected" ||
+    status === "unauthorized" ||
+    status === "waiting" ||
+    status === "failed";
   return {
-    ok: body.ok !== false,
+    ok: !failed,
     recover: body.recover === true,
     notify,
+    detail: failed ? detail : "",
   };
 }
 

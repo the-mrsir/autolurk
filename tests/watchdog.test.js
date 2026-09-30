@@ -61,8 +61,27 @@ describe("local monitor decisions", () => {
 
   it("recovers a stalled stream only when this install asked for that", () => {
     const managed = { "7": { tabId: 7, health: HEALTH.STALLED } };
-    const reply = readWatchdogReply({ ok: true, recover: true, notify: "check <script>" });
+    const reply = readWatchdogReply({ ok: true, recover: true, notify: "check <script>" }, true);
     assert.equal(reply.notify, "check script");
+    assert.equal(readWatchdogReply({ status: "OK", message: "stored" }, true).ok, true);
+    assert.equal(readWatchdogReply(null, true).ok, true);
+    const waiting = readWatchdogReply({ status: "WAITING", message: "No heartbeat received yet" }, true);
+    assert.equal(waiting.ok, false);
+    assert.equal(waiting.detail, "No heartbeat received yet");
+    const missing = readWatchdogReply({ detail: [{ msg: "Field required" }] }, false);
+    assert.equal(missing.ok, false);
+    assert.equal(missing.detail, "Field required");
+    assert.equal(
+      watchdogStatusText({
+        enabled: true,
+        endpoint: "http://127.0.0.1:9/heartbeat",
+        lastAt: 1,
+        lastOk: false,
+        lastError: "rejected",
+        lastDetail: "Field required",
+      }),
+      "The monitor refused the report. Field required"
+    );
     assert.equal(
       watchdogRecoveryTarget({ enabled: true, recover: false }, reply, managed),
       null
