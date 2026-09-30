@@ -168,6 +168,17 @@
     );
   }
 
+  function frameCounts(video) {
+    const quality = video?.getVideoPlaybackQuality?.();
+    if (!quality) return { decodedFrames: null, droppedFrames: null };
+    const decoded = Number(quality.totalVideoFrames);
+    const dropped = Number(quality.droppedVideoFrames);
+    return {
+      decodedFrames: Number.isFinite(decoded) ? decoded : null,
+      droppedFrames: Number.isFinite(dropped) ? dropped : null,
+    };
+  }
+
   function mediaState() {
     const video = getVideo();
     const quality = readStored("video-quality")?.default || "";
@@ -188,6 +199,8 @@
       adPlaying: isAdVideo(video),
       muted: video ? video.muted || video.volume === 0 : true,
       hidden: document.visibilityState === "hidden",
+      ...frameCounts(video),
+      playerError: video?.error?.message ? String(video.error.message).slice(0, 180) : null,
     };
   }
 

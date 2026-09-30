@@ -15,6 +15,7 @@ const SOURCES = [
   "shared/streak-logic.js",
   "shared/update-logic.js",
   "shared/watchdog-logic.js",
+  "shared/watchdog-telemetry.js",
   "background/service-worker.js",
   "background/activity.js",
   "background/auth.js",

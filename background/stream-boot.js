@@ -119,6 +119,15 @@ function mergeEvidence(entry, report, at) {
   if (Number.isFinite(Number(report.videoWidth))) next.videoWidth = Number(report.videoWidth);
   if (Number.isFinite(Number(report.videoHeight))) next.videoHeight = Number(report.videoHeight);
   if (typeof report.adPlaying === "boolean") next.adPlaying = report.adPlaying;
+  if (typeof report.hidden === "boolean") next.playerHidden = report.hidden;
+  if (typeof report.paused === "boolean") next.playerPaused = report.paused;
+  if (Number.isFinite(Number(report.decodedFrames))) next.decodedFrames = Number(report.decodedFrames);
+  if (Number.isFinite(Number(report.droppedFrames))) next.droppedFrames = Number(report.droppedFrames);
+  if (typeof report.playerError === "string" && report.playerError) {
+    next.playerError = report.playerError.slice(0, 180);
+  } else if (report.playerError === null) {
+    next.playerError = "";
+  }
 
   if (typeof report.muted === "boolean") {
     if (report.muted === false && entry.playerMuted !== false) next.playerUnmutedAt = at;

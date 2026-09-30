@@ -41,6 +41,8 @@ export const SESSION_KEYS = {
   // storage dies with the browser, so the next launch polls again.
   BOOTED: "browserBooted",
   STARTUP_POLLS: "startupPolls",
+  // Local-monitor session. Dies with the browser. Absent while the monitor is off.
+  WATCHDOG: "watchdogSession",
 };
 
 export const STORAGE_KEYS = {

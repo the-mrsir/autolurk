@@ -39,7 +39,8 @@ export function normalizeWatchdog(input = {}) {
     enabled: input.enabled === true,
     endpoint: parseLoopbackEndpoint(input.endpoint),
     token: String(input.token || "").replace(/[\r\n]/g, "").trim().slice(0, 256),
-    intervalSeconds: Math.min(3600, Math.max(60, Number.isFinite(interval) ? Math.round(interval) : 60)),
+    intervalSeconds: Math.min(3600, Math.max(30, Number.isFinite(interval) ? Math.round(interval) : 30)),
+    instanceId: /^[0-9a-f-]{36}$/i.test(String(input.instanceId || "")) ? String(input.instanceId) : "",
     recover: input.recover === true,
     lastAt: Number(input.lastAt) > 0 ? Number(input.lastAt) : 0,
     lastOk: input.lastOk === true,
@@ -215,5 +216,6 @@ export function watchdogRecoveryTarget(config, reply, managed = {}, now = Date.n
 }
 
 export function watchdogPeriodMinutes(intervalSeconds) {
-  return Math.max(1, Math.round(Number(intervalSeconds) / 60) || 1);
+  const seconds = Math.min(3600, Math.max(30, Number(intervalSeconds) || 30));
+  return Math.max(0.5, seconds / 60);
 }

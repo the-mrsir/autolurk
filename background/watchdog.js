@@ -2,11 +2,17 @@
 // While it is off this file's callers clear the alarm and return. They do not
 // fetch, and they do not ask Chrome for localhost access.
 
-import { ALARMS } from "../shared/constants.js";
-import { getManagedTabs, getWatchdog, saveWatchdogRecord } from "../shared/storage.js";
+import { ALARMS, SESSION_KEYS } from "../shared/constants.js";
+import {
+  getChannelPoints,
+  getManagedTabs,
+  getSessionValue,
+  getWatchdog,
+  saveWatchdogRecord,
+  setSessionValue,
+} from "../shared/storage.js";
 import {
   LOOPBACK_PATTERNS,
-  heartbeatPayload,
   heartbeatStatusPayload,
   loopbackPermissionPattern,
   normalizeWatchdog,
@@ -17,6 +23,12 @@ import {
   watchdogPeriodMinutes,
   watchdogRecoveryTarget,
 } from "../shared/watchdog-logic.js";
+import {
+  acknowledgeWatchdogEvents,
+  emptyWatchdogLedger,
+  foldWatchdogLedger,
+  heartbeatReport,
+} from "../shared/watchdog-telemetry.js";
 import { requestRecovery } from "./stream-boot.js";
 
 const REPORT_TIMEOUT_MS = 5000;
@@ -113,8 +125,52 @@ async function responseDetail(response) {
   };
 }
 
+async function composeReport(config) {
+  const now = Date.now();
+  let live = config;
+  if (!live.instanceId) {
+    live = await saveWatchdogRecord({ ...live, instanceId: crypto.randomUUID() });
+  }
+  const managed = await getManagedTabs();
+  const stored = await getSessionValue(SESSION_KEYS.WATCHDOG, null);
+  const ledger = stored && typeof stored === "object" ? { ...stored } : emptyWatchdogLedger(now);
+  if (!ledger.sessionId) {
+    ledger.sessionId = crypto.randomUUID();
+    ledger.startedAt = now;
+  }
+  const folded = foldWatchdogLedger(ledger, {
+    managed,
+    points: await getChannelPoints(),
+    now,
+  });
+  await setSessionValue(SESSION_KEYS.WATCHDOG, folded.ledger);
+  const counts = streamCounts(managed);
+  return {
+    config: live,
+    payload: heartbeatReport({
+      version: chrome.runtime.getManifest?.()?.version || "",
+      at: now,
+      ...counts,
+      instanceId: live.instanceId,
+      sessionId: folded.ledger.sessionId,
+      startedAt: folded.ledger.startedAt,
+      streams: folded.streams,
+      events: folded.ledger.events,
+    }),
+  };
+}
+
+async function ackSent(payload, body) {
+  const ids = Array.isArray(body?.ackedEventIds)
+    ? body.ackedEventIds
+    : (payload.events || []).map((event) => event.id);
+  const stored = await getSessionValue(SESSION_KEYS.WATCHDOG, null);
+  if (!stored) return;
+  await setSessionValue(SESSION_KEYS.WATCHDOG, acknowledgeWatchdogEvents(stored, ids));
+}
+
 export async function runWatchdogHeartbeat() {
-  const config = await getWatchdog();
+  let config = await getWatchdog();
   if (!config.enabled) {
     await chrome.alarms.clear(ALARMS.WATCHDOG);
     return watchdogFormState(config);
@@ -128,19 +184,18 @@ export async function runWatchdogHeartbeat() {
     return watchdogFormState(await note(config, { lastOk: false, lastError: "permission" }));
   }
 
-  const counts = streamCounts(await getManagedTabs());
-  const payload = heartbeatPayload({
-    version: chrome.runtime.getManifest?.()?.version || "",
-    ...counts,
-    at: Date.now(),
-  });
+  const composed = await composeReport(config);
+  config = composed.config;
+  const payload = composed.payload;
   let response;
+  let detailAccepted = true;
   try {
     response = await postReport(config, payload);
   } catch {
     return watchdogFormState(await note(config, { lastOk: false, lastError: "unreachable" }));
   }
   if (response.status === 400) {
+    detailAccepted = false;
     const first = await responseDetail(response);
     let retry;
     try {
@@ -184,6 +239,8 @@ export async function runWatchdogHeartbeat() {
       })
     );
   }
+
+  if (detailAccepted) await ackSent(payload, body);
 
   let notice = reply.notify;
   const tabId = watchdogRecoveryTarget(config, reply, await getManagedTabs());

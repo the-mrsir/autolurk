@@ -10,9 +10,16 @@ import {
   parseLoopbackEndpoint,
   readWatchdogReply,
   watchdogFormState,
+  watchdogPeriodMinutes,
   watchdogRecoveryTarget,
   watchdogStatusText,
 } from "../shared/watchdog-logic.js";
+import {
+  acknowledgeWatchdogEvents,
+  emptyWatchdogLedger,
+  foldWatchdogLedger,
+  heartbeatReport,
+} from "../shared/watchdog-telemetry.js";
 
 const mock = chromeMock();
 
@@ -23,6 +30,8 @@ describe("local monitor decisions", () => {
     assert.equal(config.endpoint, "");
     assert.equal(config.token, "");
     assert.equal(config.recover, false);
+    assert.equal(config.intervalSeconds, 30);
+    assert.equal(watchdogPeriodMinutes(30), 0.5);
     assert.equal(watchdogStatusText(config), "Off.");
   });
 
@@ -153,6 +162,7 @@ describe("local monitor runtime", () => {
       const form = await runWatchdogHeartbeat();
       const backup = JSON.stringify(await exportData());
       assert.equal(fetched, 0);
+      assert.equal(mock.session.watchdogSession, undefined);
       assert.equal(mock.alarms.has("external-watchdog"), false);
       assert.equal(form.enabled, false);
       assert.equal("token" in form, false);
@@ -186,9 +196,21 @@ describe("local monitor runtime", () => {
         intervalSeconds: 60,
         recover: false,
       });
+      const body = JSON.parse(seen.init.body);
       assert.equal(seen.url, "http://127.0.0.1:8765/heartbeat");
       assert.equal(seen.init.headers.Authorization, "Bearer monitor-secret");
       assert.equal(seen.init.body.includes("monitor-secret"), false);
+      assert.equal(body.schemaVersion, 2);
+      assert.equal(body.extension, "autolurk");
+      assert.equal(body.managed, 1);
+      assert.equal(body.playing, 1);
+      assert.equal(body.stalled, 0);
+      assert.equal(body.at > 1_000_000_000_000, true);
+      assert.equal(body.streams.length, 1);
+      assert.equal(body.streams[0].channel, "one");
+      assert.equal(body.streams[0].watchStreak.count, null);
+      assert.equal(body.streams[0].channelPoints.balance, null);
+      assert.equal(body.instanceId.includes("r640"), false);
       assert.equal(form.lastOk, true);
       assert.equal("token" in form, false);
       assert.equal(form.hasToken, true);
@@ -228,9 +250,11 @@ describe("local monitor runtime", () => {
       });
       assert.equal(bodies.length, 2);
       assert.equal(bodies[0].extension, "autolurk");
+      assert.equal(bodies[0].schemaVersion, 2);
       assert.equal(bodies[1].status, "OK");
       assert.equal(bodies[1].extension, undefined);
       assert.equal(form.lastOk, true);
+      assert.equal(mock.session.watchdogSession.events.length > 0, true);
     } finally {
       globalThis.fetch = original;
     }
@@ -267,6 +291,147 @@ describe("local monitor runtime", () => {
     } finally {
       globalThis.fetch = original;
     }
+  });
+});
+
+describe("watchdog schema 2", () => {
+  function ledgerAt(now) {
+    return { ...emptyWatchdogLedger(now), sessionId: "session-1", startedAt: now };
+  }
+
+  it("keeps the original counts and leaves unknown measurements empty", () => {
+    const now = 1_790_774_874_469;
+    const { ledger, streams } = foldWatchdogLedger(ledgerAt(now - 1000), {
+      now,
+      managed: {
+        "4": {
+          tabId: 4,
+          login: "Example_Channel",
+          health: HEALTH.MEDIA_PLAYING,
+          muted: true,
+          streamId: "live",
+          lastAdvanceAt: now - 50,
+          selectedQuality: "160p",
+          videoWidth: 284,
+          videoHeight: 160,
+        },
+        "5": { tabId: 5, login: "second", health: HEALTH.BOOTING },
+      },
+      points: {},
+    });
+    const report = heartbeatReport({
+      version: "1.2.38",
+      at: now,
+      managed: 2,
+      playing: 1,
+      stalled: 0,
+      instanceId: "11111111-1111-4111-8111-111111111111",
+      sessionId: ledger.sessionId,
+      startedAt: ledger.startedAt,
+      streams,
+      events: ledger.events,
+    });
+    assert.equal(report.schemaVersion, 2);
+    assert.equal(report.extension, "autolurk");
+    assert.equal(report.managed, 2);
+    assert.equal(report.playing, 1);
+    assert.equal(report.stalled, 0);
+    assert.equal(report.at, now);
+    assert.equal(report.streams.length, 2);
+    assert.equal(report.streams[0].channel, "example_channel");
+    assert.equal(report.streams[0].state, "PLAYING");
+    assert.equal(report.streams[0].muted, true);
+    assert.equal(report.streams[0].decodedFrames, null);
+    assert.equal(report.streams[0].channelPoints.balance, null);
+    assert.equal(report.streams[0].channelPoints.successfulClaims, null);
+    assert.equal(report.streams[1].watchStreak.count, null);
+    assert.equal(report.streams[1].watchStreak.successfulClaims, null);
+    assert.equal(JSON.stringify(report).includes("monitor-secret"), false);
+  });
+
+  it("records one pause and does not call it a stall", () => {
+    const start = ledgerAt(1_000);
+    const first = foldWatchdogLedger(start, {
+      now: 2_000,
+      managed: {
+        "9": { tabId: 9, login: "quiet", health: HEALTH.STALLED, healthReason: "player is paused" },
+      },
+    });
+    const second = foldWatchdogLedger(first.ledger, {
+      now: 32_000,
+      managed: {
+        "9": { tabId: 9, login: "quiet", health: HEALTH.STALLED, healthReason: "player is paused" },
+      },
+    });
+    assert.equal(first.streams[0].state, "PAUSED");
+    assert.equal(first.streams[0].stallCount, 0);
+    assert.equal(first.streams[0].pauseCount, 1);
+    assert.equal(first.streams[0].lastFailureCategory, null);
+    assert.equal(second.streams[0].pauseCount, 1);
+    assert.equal(second.ledger.events.filter((event) => event.type === "playback-paused").length, 1);
+    assert.equal(second.ledger.events.filter((event) => event.type === "playback-stalled").length, 0);
+  });
+
+  it("emits one stall and one recovery, then drops them only after acknowledgement", () => {
+    const start = ledgerAt(10_000);
+    const stalled = foldWatchdogLedger(start, {
+      now: 20_000,
+      managed: {
+        "3": { tabId: 3, login: "held", health: HEALTH.STALLED, healthReason: "video froze", recoveryAttempts: 1 },
+      },
+    });
+    const still = foldWatchdogLedger(stalled.ledger, {
+      now: 50_000,
+      managed: {
+        "3": { tabId: 3, login: "held", health: HEALTH.STALLED, healthReason: "video froze", recoveryAttempts: 1 },
+      },
+    });
+    assert.equal(still.streams[0].stallCount, 1);
+    assert.equal(still.ledger.events.filter((event) => event.type === "playback-stalled").length, 1);
+    const kept = acknowledgeWatchdogEvents(still.ledger, []);
+    assert.equal(kept.events.length, still.ledger.events.length);
+    const playing = foldWatchdogLedger(kept, {
+      now: 80_000,
+      managed: { "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, recoveryAttempts: 0 } },
+    });
+    assert.equal(playing.streams[0].successfulRecoveries, 1);
+    assert.equal(playing.ledger.events.filter((event) => event.type === "playback-recovered").length, 1);
+    const again = foldWatchdogLedger(playing.ledger, {
+      now: 110_000,
+      managed: { "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, lastAdvanceAt: 110_000 } },
+    });
+    assert.equal(again.ledger.events.filter((event) => event.type === "playback-recovered").length, 1);
+    assert.equal(again.streams[0].sessionPlaybackSeconds, 30);
+    const acked = acknowledgeWatchdogEvents(
+      again.ledger,
+      again.ledger.events.map((event) => event.id)
+    );
+    assert.equal(acked.events.length, 0);
+    const after = foldWatchdogLedger(acked, {
+      now: 140_000,
+      managed: { "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, lastAdvanceAt: 140_000 } },
+    });
+    assert.equal(after.ledger.events.length, 0);
+  });
+
+  it("counts a confirmed claim separately from a balance change", () => {
+    const start = ledgerAt(5_000);
+    const seen = foldWatchdogLedger(start, {
+      now: 6_000,
+      managed: { "2": { tabId: 2, login: "points", health: HEALTH.MEDIA_PLAYING } },
+      points: { points: { balance: 1000, balanceApproximate: false, claims: 2, unconfirmedClaims: 1, lastClaimAt: 0 } },
+    });
+    const claimed = foldWatchdogLedger(seen.ledger, {
+      now: 7_000,
+      managed: { "2": { tabId: 2, login: "points", health: HEALTH.MEDIA_PLAYING } },
+      points: { points: { balance: 1400, balanceApproximate: false, claims: 3, unconfirmedClaims: 1, lastClaimAt: 7_000 } },
+    });
+    assert.equal(claimed.streams[0].channelPoints.balance, 1400);
+    assert.equal(claimed.streams[0].channelPoints.observedBalanceChange, 400);
+    assert.equal(claimed.streams[0].channelPoints.successfulClaims, 3);
+    assert.equal(claimed.streams[0].channelPoints.failedClaims, 1);
+    assert.equal(claimed.ledger.events.filter((event) => event.type === "bonus-claimed").length, 1);
+    assert.equal(claimed.streams[0].watchStreak.count, null);
   });
 });
 

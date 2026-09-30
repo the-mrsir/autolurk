@@ -1008,7 +1008,7 @@ async function loadWatchdogForm() {
 function fillWatchdogForm(config) {
   $("watchdogEnabled").checked = Boolean(config?.enabled);
   $("watchdogEndpoint").value = config?.endpoint || "";
-  $("watchdogInterval").value = String(config?.intervalSeconds || 60);
+  $("watchdogInterval").value = String(config?.intervalSeconds || 30);
   $("watchdogRecover").checked = Boolean(config?.recover);
   $("watchdogToken").value = "";
   $("watchdogToken").placeholder = config?.hasToken ? "Saved on this computer" : "";
