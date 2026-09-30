@@ -2,6 +2,8 @@ import { MESSAGE } from "../shared/constants.js";
 import { checkForUpdate } from "../background/updates.js";
 import { describeUpdate } from "../shared/update-logic.js";
 import { allowUpdateOrigin } from "./update-client.js";
+import { allowLoopback } from "./watchdog-client.js";
+import { watchdogStatusText } from "../shared/watchdog-logic.js";
 import {
   compareFavorites,
   escapeHtml,
@@ -37,12 +39,15 @@ function send(type, payload = {}) {
 }
 
 function setView(view) {
+  if (location.hash === "#developer") {
+    history.replaceState(null, "", location.pathname + location.search);
+  }
   state.view = view;
   document.querySelectorAll(".nav-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === view);
   });
   const titles = { live: "Live", following: "Following", activity: "Activity", settings: "Settings" };
-  $("pageTitle").textContent = titles[view];
+  $("pageTitle").textContent = location.hash === "#developer" ? "Local monitor" : titles[view];
   render();
 }
 
@@ -307,10 +312,20 @@ function render() {
   $("liveView").classList.toggle("hidden", !connected || Boolean(flow) || state.view !== "live");
   $("followingView").classList.toggle("hidden", !connected || Boolean(flow) || state.view !== "following");
   $("activityView").classList.toggle("hidden", !connected || Boolean(flow) || state.view !== "activity");
-  $("settingsView").classList.toggle("hidden", state.view !== "settings");
+  const developer = location.hash === "#developer";
+  $("settingsView").classList.toggle("hidden", state.view !== "settings" || developer);
+  $("developerView").classList.toggle("hidden", !developer);
 
-  const showToolbar = connected && !flow && (state.view === "live" || state.view === "following");
+  const showToolbar = connected && !flow && !developer && (state.view === "live" || state.view === "following");
   $("streamerToolbar").classList.toggle("hidden", !showToolbar);
+  if (developer) {
+    $("setupView").classList.add("hidden");
+    $("liveView").classList.add("hidden");
+    $("followingView").classList.add("hidden");
+    $("activityView").classList.add("hidden");
+    $("pageTitle").textContent = "Local monitor";
+    loadWatchdogForm();
+  }
   $("followFilters").classList.toggle("hidden", state.view !== "following");
 
   renderSetup(snap);
@@ -977,6 +992,29 @@ function watchDeviceFlow(flow) {
   }, 3000);
 }
 
+let watchdogFormLoaded = false;
+
+async function loadWatchdogForm() {
+  if (watchdogFormLoaded) return;
+  watchdogFormLoaded = true;
+  try {
+    fillWatchdogForm(await send(MESSAGE.WATCHDOG_GET));
+  } catch (error) {
+    watchdogFormLoaded = false;
+    $("watchdogStatus").textContent = error.message;
+  }
+}
+
+function fillWatchdogForm(config) {
+  $("watchdogEnabled").checked = Boolean(config?.enabled);
+  $("watchdogEndpoint").value = config?.endpoint || "";
+  $("watchdogInterval").value = String(config?.intervalSeconds || 60);
+  $("watchdogRecover").checked = Boolean(config?.recover);
+  $("watchdogToken").value = "";
+  $("watchdogToken").placeholder = config?.hasToken ? "Saved on this computer" : "";
+  $("watchdogStatus").textContent = watchdogStatusText(config);
+}
+
 function revealUpdates() {
   if (location.hash !== "#updates") return;
   setView("settings");
@@ -987,7 +1025,54 @@ function revealUpdates() {
   });
 }
 
-window.addEventListener("hashchange", revealUpdates);
+window.addEventListener("hashchange", () => {
+  watchdogFormLoaded = location.hash === "#developer" ? watchdogFormLoaded : false;
+  revealUpdates();
+  if (state.snapshot) render();
+});
+
+$("watchdogSaveBtn").addEventListener("click", async () => {
+  $("watchdogSaveBtn").disabled = true;
+  try {
+    const enabled = $("watchdogEnabled").checked;
+    const endpoint = $("watchdogEndpoint").value.trim();
+    if (enabled) await allowLoopback(endpoint);
+    const patch = {
+      enabled,
+      endpoint,
+      intervalSeconds: Number($("watchdogInterval").value),
+      recover: $("watchdogRecover").checked,
+    };
+    const typed = $("watchdogToken").value;
+    if (typed) {
+      patch.token = typed;
+      patch.tokenSet = true;
+    }
+    fillWatchdogForm(await send(MESSAGE.WATCHDOG_SAVE, { patch }));
+  } catch (error) {
+    $("watchdogStatus").textContent = error.message;
+  } finally {
+    $("watchdogSaveBtn").disabled = false;
+  }
+});
+
+$("watchdogClearTokenBtn").addEventListener("click", async () => {
+  try {
+    const config = await send(MESSAGE.WATCHDOG_SAVE, {
+      patch: {
+        enabled: $("watchdogEnabled").checked,
+        endpoint: $("watchdogEndpoint").value.trim(),
+        intervalSeconds: Number($("watchdogInterval").value),
+        recover: $("watchdogRecover").checked,
+        token: "",
+        tokenSet: true,
+      },
+    });
+    fillWatchdogForm(config);
+  } catch (error) {
+    $("watchdogStatus").textContent = error.message;
+  }
+});
 
 refresh()
   .then(() => {

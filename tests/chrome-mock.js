@@ -172,6 +172,8 @@ export function installChromeMock({ tabs = [], storage = {} } = {}) {
     return out;
   }
 
+  const grantedOrigins = new Set(["https://*/*"]);
+
   const chromeMock = {
     runtime: {
       lastError: null,
@@ -422,6 +424,18 @@ export function installChromeMock({ tabs = [], storage = {} } = {}) {
       onButtonClicked: { addListener: () => {} },
     },
 
+    permissions: {
+      contains: ({ origins = [] } = {}) => Promise.resolve(origins.every((origin) => grantedOrigins.has(origin))),
+      request: ({ origins = [] } = {}) => {
+        for (const origin of origins) grantedOrigins.add(origin);
+        return Promise.resolve(true);
+      },
+      remove: ({ origins = [] } = {}) => {
+        for (const origin of origins) grantedOrigins.delete(origin);
+        return Promise.resolve(true);
+      },
+    },
+
     action: {
       setBadgeBackgroundColor: () => Promise.resolve(),
       setBadgeText: () => Promise.resolve(),
@@ -498,6 +512,8 @@ export function installChromeMock({ tabs = [], storage = {} } = {}) {
       for (const key of Object.keys(sync)) delete sync[key];
       Object.assign(local, structuredCloneSafe(nextStorage));
       alarms.clear();
+      grantedOrigins.clear();
+      grantedOrigins.add("https://*/*");
       notifications.length = 0;
       tabState.clear();
       groupState.clear();

@@ -20,6 +20,7 @@ await import("./sync.test.js");
 await import("./streaks.test.js");
 await import("./update.test.js");
 await import("./server.test.js");
+await import("./watchdog.test.js");
 // Skips itself outside a browser: it reads source files over fetch.
 await import("./static.test.js");
 // Last: importing the service worker installs listeners for good.

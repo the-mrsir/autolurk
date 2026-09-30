@@ -28,6 +28,7 @@ describe("service worker wake", () => {
     assert.equal(alarmsAtWake.get(ALARMS.UPDATE_CHECK).periodInMinutes, 720);
     assert.ok(alarmsAtWake.has(ALARMS.SERVER_ROTATE));
     assert.equal(alarmsAtWake.get(ALARMS.SERVER_ROTATE).periodInMinutes, 2);
+    assert.notOk(alarmsAtWake.has(ALARMS.WATCHDOG));
   });
 
   it("honours the saved interval instead of resetting it", () => {

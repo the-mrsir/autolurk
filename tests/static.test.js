@@ -14,6 +14,7 @@ const SOURCES = [
   "shared/sync-logic.js",
   "shared/streak-logic.js",
   "shared/update-logic.js",
+  "shared/watchdog-logic.js",
   "background/service-worker.js",
   "background/activity.js",
   "background/auth.js",
@@ -31,8 +32,10 @@ const SOURCES = [
   "background/twitch-api.js",
   "background/updates.js",
   "background/wake.js",
+  "background/watchdog.js",
   "dashboard/dashboard.js",
   "dashboard/update-client.js",
+  "dashboard/watchdog-client.js",
   "popup/popup.js",
 ];
 
@@ -302,6 +305,15 @@ describe("static wiring", () => {
       (manifest.host_permissions || []).includes("https://player.twitch.tv/*"),
       "player.twitch.tv is missing from host_permissions"
     );
+    const requiredHosts = manifest.host_permissions || [];
+    assert.equal(
+      requiredHosts.some((pattern) => /localhost|127\.0\.0\.1/.test(pattern)),
+      false,
+      "localhost must stay optional"
+    );
+    const optionalHosts = manifest.optional_host_permissions || [];
+    assert.ok(optionalHosts.includes("http://127.0.0.1/*"));
+    assert.ok(optionalHosts.includes("http://localhost/*"));
 
     const source = await read("content/twitch-embed.js");
     assert.ok(

@@ -350,6 +350,32 @@
         </div>
         <p id="syncMeta" class="meta"></p>
       </section>
+
+      <section id="developerView" class="panel hidden">
+        <section class="set-block">
+          <h2>Local monitor</h2>
+          <p class="meta">Stays on this computer. Nothing is sent until this is turned on, and only to an address on this machine.</p>
+          <label class="set-row"><span>Enable external watchdog</span><input id="watchdogEnabled" type="checkbox" /></label>
+          <label class="set-row">
+            <span>Heartbeat address</span>
+            <input id="watchdogEndpoint" type="url" placeholder="http://127.0.0.1:9/heartbeat" autocomplete="off" />
+          </label>
+          <label class="set-row">
+            <span>Token</span>
+            <input id="watchdogToken" type="password" autocomplete="off" />
+          </label>
+          <label class="set-row">
+            <span>Report every (seconds)</span>
+            <input id="watchdogInterval" type="number" min="60" max="3600" value="60" />
+          </label>
+          <label class="set-row"><span>Recover a stream when asked</span><input id="watchdogRecover" type="checkbox" /></label>
+          <p id="watchdogStatus" class="meta">Off.</p>
+          <div class="inline">
+            <button id="watchdogSaveBtn" class="primary" type="button">Save</button>
+            <button id="watchdogClearTokenBtn" type="button">Clear token</button>
+          </div>
+        </section>
+      </section>
     </main>
 
     <script type="module" src="dashboard.js"></script>

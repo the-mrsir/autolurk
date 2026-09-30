@@ -89,6 +89,7 @@ import {
   syncNow,
 } from "./sync.js";
 import { handleHealthTick, runWakeRecovery, WAKE_GAP_MS } from "./wake.js";
+import { parkWatchdog, readWatchdogSettings, runWatchdogHeartbeat, saveWatchdogSettings } from "./watchdog.js";
 import {
   handleBootWatchAlarm,
   handlePlayerBoot,
@@ -153,6 +154,7 @@ async function runInitialize(options) {
   // not spend a poll opening streams the user unstarred on the other one.
   await reconcileSync().catch((error) => console.warn("Sync reconcile failed", error));
   await scheduleAlarms({ reset });
+  await parkWatchdog().catch((error) => console.warn("Local monitor schedule failed", error));
   await reconcileMultistream().catch((error) => console.warn("Multistream reconcile failed", error));
   await reconcileManagedTabs();
   await buildSnapshot();
@@ -304,6 +306,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await rotateServerStreamsIfDue().catch((error) => console.warn("Server rotation failed", error));
         await buildSnapshot();
         return;
+      case ALARMS.WATCHDOG:
+        await runWatchdogHeartbeat().catch((error) => console.warn("Local monitor failed", error));
+        return;
       case ALARMS.SYNC_FOLLOWS:
         await runFollowSyncAlarm();
         return;
@@ -397,6 +402,8 @@ const PAGE_MESSAGES = new Set([
   MESSAGE.EXPORT_DATA,
   MESSAGE.IMPORT_DATA,
   MESSAGE.CHECK_UPDATE,
+  MESSAGE.WATCHDOG_GET,
+  MESSAGE.WATCHDOG_SAVE,
   MESSAGE.START_MULTISTREAM,
   MESSAGE.STOP_MULTISTREAM,
   MESSAGE.FOCUS_MULTISTREAM,
@@ -616,6 +623,10 @@ async function handleMessage(message, sender) {
     case MESSAGE.SEVENTV_DETECTED:
       if (sender.tab?.id) await recordSevenTvExtension(Boolean(message.present));
       return true;
+    case MESSAGE.WATCHDOG_GET:
+      return readWatchdogSettings();
+    case MESSAGE.WATCHDOG_SAVE:
+      return saveWatchdogSettings(message.patch || {});
     default:
       return null;
   }
@@ -868,6 +879,9 @@ chrome.notifications.onButtonClicked.addListener(async (notificationId, buttonIn
 // Repair alarms Chrome dropped without restarting healthy schedules.
 scheduleAlarms({ reset: false }).catch((error) => {
   console.warn("Alarm check failed", error);
+});
+parkWatchdog().catch((error) => {
+  console.warn("Local monitor schedule failed", error);
 });
 
 // onStartup is not delivered when Chrome starts a worker that was not already

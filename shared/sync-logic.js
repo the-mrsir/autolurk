@@ -55,6 +55,11 @@ export const UNSYNCED_SETTINGS = new Set([
   "backgroundQuality",
   "watchingQuality",
   "serverRotation",
+  "watchdogEnabled",
+  "watchdogEndpoint",
+  "watchdogToken",
+  "watchdogIntervalSeconds",
+  "watchdogRecover",
 ]);
 
 // A tombstone is kept this long. It only has to outlive the longest realistic

@@ -230,6 +230,7 @@ describe("merging preferences between computers", () => {
       backgroundQuality: "360p30",
       watchingQuality: "480p30",
       serverRotation: true,
+      watchdogToken: "local-secret",
       muteTabs: false,
     });
     assert.deepEqual(stripped, { muteTabs: false });
@@ -465,6 +466,7 @@ describe("carrying favorites in a file", () => {
       storage: {
         ...base,
         auth: { accessToken: "secret-token", refreshToken: "secret-refresh" },
+        watchdog: { enabled: true, token: "monitor-secret", endpoint: "http://127.0.0.1:9/heartbeat" },
         favorites: { "1": { userId: "1", login: "one", updatedAt: NOW } },
       },
     });
@@ -474,6 +476,7 @@ describe("carrying favorites in a file", () => {
 
     assert.equal(serialized.includes("secret-token"), false, "access token was exported");
     assert.equal(serialized.includes("secret-refresh"), false, "refresh token was exported");
+    assert.equal(serialized.includes("monitor-secret"), false, "monitor token was exported");
   });
 
   it("refuses a file that is not an AutoLurk backup", async () => {

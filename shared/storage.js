@@ -6,6 +6,7 @@ import {
   PUBLISHED_CLIENT_ID,
   STORAGE_KEYS,
 } from "./constants.js";
+import { normalizeWatchdog } from "./watchdog-logic.js";
 
 export function isPublishedApp() {
   return Boolean(PUBLISHED_CLIENT_ID);
@@ -223,6 +224,15 @@ export async function getActivity() {
 export async function saveActivity(activity) {
   await chrome.storage.local.set({ [STORAGE_KEYS.ACTIVITY]: activity });
   return activity;
+}
+
+export async function getWatchdog() {
+  const result = await chrome.storage.local.get(STORAGE_KEYS.WATCHDOG);
+  return normalizeWatchdog(result[STORAGE_KEYS.WATCHDOG] || {});
+}
+
+export function saveWatchdogRecord(record) {
+  return mutateStored(STORAGE_KEYS.WATCHDOG, getWatchdog, () => normalizeWatchdog(record));
 }
 
 export async function getChannelPoints() {

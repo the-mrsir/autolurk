@@ -10,6 +10,8 @@ export const ALARMS = {
   STREAK_CHECK: "streak-check",
   UPDATE_CHECK: "update-check",
   SERVER_ROTATE: "server-rotate",
+  // Created only after this install turns the local monitor on. Absent otherwise.
+  WATCHDOG: "external-watchdog",
   // Not part of the standing schedule. Created only when the startup poll
   // could not reach Twitch, then cleared once a poll succeeds.
   STARTUP_POLL: "startup-poll",
@@ -56,6 +58,7 @@ export const STORAGE_KEYS = {
   SEVENTV: "sevenTv",
   CHANNEL_POINTS: "channelPoints",
   UPDATE: "extensionUpdate",
+  WATCHDOG: "watchdog",
 };
 
 export const PRIORITY = {
@@ -403,4 +406,6 @@ export const MESSAGE = {
   EXPORT_DATA: "EXPORT_DATA",
   IMPORT_DATA: "IMPORT_DATA",
   CHECK_UPDATE: "CHECK_UPDATE",
+  WATCHDOG_GET: "WATCHDOG_GET",
+  WATCHDOG_SAVE: "WATCHDOG_SAVE",
 };
