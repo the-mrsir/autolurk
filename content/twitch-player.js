@@ -439,9 +439,9 @@
     // Do not hide channel sections, unload <video> elements, or delete chat
     // nodes. Twitch unmounts that React tree and it stays gone until reload.
     window.dispatchEvent(new CustomEvent("autolurk-quality-mode", { detail: qualityDetail("low") }));
-    // Twitch applies this when the player boots. Writing "unmuted" before the
-    // page has been clicked makes Chrome pause the element.
-    writeStored("video-muted", { default: documentActivated() ? false : true });
+    // The Chrome tab is what stays muted. Twitch's own player must boot
+    // unmuted, or a reload leaves the stream silenced and looking stalled.
+    writeStored("video-muted", { default: false });
     const volume = Number(localStorage.getItem("volume"));
     if (!Number.isFinite(volume) || volume <= 0) localStorage.setItem("volume", "0.5");
 
@@ -454,6 +454,7 @@
       writeStored("video-quality", { default: backgroundQuality });
     }
     const video = getVideo();
+    if (video && (video.muted || video.volume === 0)) tryUnmute(video);
     // The startup preference is enough before a player exists. Opening
     // Twitch's menu while an already-correct stream is booting can itself emit
     // waiting/stalled events, so runtime correction is reserved for genuine
@@ -521,18 +522,23 @@
       // Chrome refuses unmuted autoplay without a user gesture. Muted media is
       // always allowed, so fall back and try to gain sound later.
       if (allowMuting && error.name === "NotAllowedError") {
-        // A visible tab still needs this fallback during a programmatic open
-        // (no user gesture on the Twitch page). keepMuted is cleared the
-        // moment the tab is in front of the user, so this does not stay muted.
-        keepMuted = true;
+        // Chrome will start a muted element. The player is unmuted again
+        // immediately: the tab mute is what keeps the computer quiet.
         video.muted = true;
         try {
           await video.play();
-          watchForUnmuteOpportunity();
-          return "";
         } catch (mutedError) {
           return `muted playback refused (${mutedError.name})`;
         }
+        tryUnmute(video);
+        if (video.paused) {
+          try {
+            await video.play();
+          } catch {
+            // The element is unmuted. Leaving it muted is not the fallback.
+          }
+        }
+        return "";
       }
       return `playback refused (${error.name})`;
     }
@@ -553,14 +559,6 @@
     return Boolean(node.closest('[data-a-target="player-mute-unmute-button"]'));
   }
 
-  // Chrome pauses a media element that is unmuted before the document has
-  // received a click or a keypress. Visibility is not that gesture.
-  function documentActivated() {
-    if (handlingUserInput) return true;
-    const activation = globalThis.navigator?.userActivation;
-    return activation?.hasBeenActive === true;
-  }
-
   function rememberUnmutedPreference() {
     writeStored("video-muted", { default: false });
     const volume = Number(localStorage.getItem("volume"));
@@ -574,10 +572,6 @@
   // the notification tray and can leave the player muted.
   function tryUnmute(video, { allowClick = true } = {}) {
     if (!video || keepMuted) return;
-    if (!documentActivated()) {
-      watchForUnmuteOpportunity();
-      return;
-    }
     rememberUnmutedPreference();
     if (video.volume === 0) video.volume = 0.5;
     const showsMuted = playerShowsMuted();
@@ -727,10 +721,7 @@
     });
     // While the user is looking, leave mute alone. A quality change fires
     // playing again and must not unmute a stream they just silenced.
-    if (!looking() && !keepMuted && video.muted) {
-      if (documentActivated()) tryUnmute(video);
-      else watchForUnmuteOpportunity();
-    }
+    if (!looking() && video.muted) tryUnmute(video);
   }
 
   function onPause(event) {
@@ -738,17 +729,11 @@
     const video = event.target;
     if (video !== getVideo()) return;
 
-    // Chrome suspends playback when an unmute is refused. The pause arrives
-    // immediately, so this undoes it without waiting on any timer.
-    //
-    // A visible tab pauses for lots of other reasons — quality changes,
-    // ads, the user hitting space. Forcing mute there is how the player
-    // ends up stuck muted while you watch.
+    // Chrome pauses an element it was not ready to unmute. Put it back to
+    // playing without muting the player. The tab mute is already in place.
     if (!looking() && Date.now() - lastUnmuteAt < 10000) {
-      keepMuted = true;
-      video.muted = true;
+      video.muted = false;
       attemptPlay(video, { allowMuting: false });
-      watchForUnmuteOpportunity();
       return;
     }
     report();
@@ -804,8 +789,7 @@
     const refusal = await attemptPlay(video);
     if (refusal) boot("stalled", { reason: refusal });
     if (looking()) restoreAudioForViewing();
-    else if (!keepMuted && documentActivated()) tryUnmute(video);
-    else if (!keepMuted) watchForUnmuteOpportunity();
+    else tryUnmute(video);
   }
 
   // ---------------------------------------------------------------------

@@ -562,7 +562,7 @@ describe("player behavior inside a Twitch page", () => {
     assert.equal(buttonClicks, before + 1, "the user's click did not reach the mute button");
   });
 
-  it("does not unmute a stream the page has never been clicked", async () => {
+  it("unmutes a background stream the page has never been clicked", async () => {
     const source = await readFile(new URL("content/twitch-player.js", root), "utf8");
     const docListeners = new Map();
     const { Storage, localStorage } = storage();
@@ -633,9 +633,9 @@ describe("player behavior inside a Twitch page", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    assert.equal(stream.muted, true, "the player was unmuted before a click");
-    assert.equal(stream.paused, false, "refusing the unmute paused the stream");
-    assert.equal(localStorage.getItem("video-muted"), JSON.stringify({ default: true }));
+    assert.equal(stream.muted, false, "the player was left muted");
+    assert.equal(stream.paused, false, "unmuting the player paused the stream");
+    assert.equal(localStorage.getItem("video-muted"), JSON.stringify({ default: false }));
 
     for (const fn of docListeners.get("pointerdown") || []) fn({ target: { closest: () => null } });
     assert.equal(stream.muted, false, "a click on the page did not unmute the player");
