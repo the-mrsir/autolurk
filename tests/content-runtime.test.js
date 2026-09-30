@@ -562,6 +562,85 @@ describe("player behavior inside a Twitch page", () => {
     assert.equal(buttonClicks, before + 1, "the user's click did not reach the mute button");
   });
 
+  it("does not unmute a stream the page has never been clicked", async () => {
+    const source = await readFile(new URL("content/twitch-player.js", root), "utf8");
+    const docListeners = new Map();
+    const { Storage, localStorage } = storage();
+    const stream = {
+      paused: false,
+      currentTime: 8,
+      readyState: 4,
+      networkState: 2,
+      videoWidth: 284,
+      videoHeight: 160,
+      volume: 0.5,
+      muted: true,
+      src: "",
+      currentSrc: "",
+      className: "",
+      clientWidth: 0,
+      clientHeight: 0,
+      hasAttribute: () => false,
+      setAttribute: () => {},
+      getBoundingClientRect: () => ({ width: 0, height: 0 }),
+      closest: () => null,
+      play: async () => {},
+    };
+    const container = { querySelectorAll: () => [stream] };
+    const context = {
+      Storage,
+      localStorage,
+      MutationObserver: class {
+        observe() {}
+        disconnect() {}
+      },
+      navigator: { userActivation: { hasBeenActive: false } },
+      location: { pathname: "/lystic", hash: "#autolurk" },
+      document: {
+        documentElement: {},
+        visibilityState: "hidden",
+        querySelectorAll: (selector) =>
+          selector === '[data-a-player-type="site"]' ? [container] : [],
+        querySelector: () => null,
+        addEventListener: (type, fn) => {
+          const list = docListeners.get(type) || [];
+          list.push(fn);
+          docListeners.set(type, list);
+        },
+        removeEventListener: () => {},
+      },
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+      CustomEvent: class {
+        constructor(type, init) {
+          this.type = type;
+          this.detail = init?.detail;
+        }
+      },
+      window: { dispatchEvent: () => {} },
+      chrome: {
+        runtime: {
+          lastError: null,
+          onMessage: { addListener: () => {} },
+          sendMessage: (_message, callback) => callback?.({ result: true }),
+        },
+      },
+      globalThis: null,
+    };
+    context.globalThis = context;
+    context.__autoLurk = { extractChannel: () => "lystic", send: () => {} };
+
+    vm.runInNewContext(source, context);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    assert.equal(stream.muted, true, "the player was unmuted before a click");
+    assert.equal(stream.paused, false, "refusing the unmute paused the stream");
+    assert.equal(localStorage.getItem("video-muted"), JSON.stringify({ default: true }));
+
+    for (const fn of docListeners.get("pointerdown") || []) fn({ target: { closest: () => null } });
+    assert.equal(stream.muted, false, "a click on the page did not unmute the player");
+  });
+
   it("does not click the player when the notification bell is pressed", async () => {
     const source = await readFile(new URL("content/twitch-player.js", root), "utf8");
     const listeners = [];
@@ -610,6 +689,7 @@ describe("player behavior inside a Twitch page", () => {
         observe() {}
         disconnect() {}
       },
+      navigator: { userActivation: { hasBeenActive: true } },
       location: { pathname: "/streamer", hash: "#autolurk" },
       document: {
         documentElement: {},

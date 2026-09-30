@@ -439,7 +439,9 @@
     // Do not hide channel sections, unload <video> elements, or delete chat
     // nodes. Twitch unmounts that React tree and it stays gone until reload.
     window.dispatchEvent(new CustomEvent("autolurk-quality-mode", { detail: qualityDetail("low") }));
-    writeStored("video-muted", { default: false });
+    // Twitch applies this when the player boots. Writing "unmuted" before the
+    // page has been clicked makes Chrome pause the element.
+    writeStored("video-muted", { default: documentActivated() ? false : true });
     const volume = Number(localStorage.getItem("volume"));
     if (!Number.isFinite(volume) || volume <= 0) localStorage.setItem("volume", "0.5");
 
@@ -551,9 +553,14 @@
     return Boolean(node.closest('[data-a-target="player-mute-unmute-button"]'));
   }
 
-  // Unmuting can get playback suspended by Chrome. Rather than sleeping to
-  // find out, the `pause` handler below watches for it and undoes this.
-  //
+  // Chrome pauses a media element that is unmuted before the document has
+  // received a click or a keypress. Visibility is not that gesture.
+  function documentActivated() {
+    if (handlingUserInput) return true;
+    const activation = globalThis.navigator?.userActivation;
+    return activation?.hasBeenActive === true;
+  }
+
   function rememberUnmutedPreference() {
     writeStored("video-muted", { default: false });
     const volume = Number(localStorage.getItem("volume"));
@@ -567,6 +574,10 @@
   // the notification tray and can leave the player muted.
   function tryUnmute(video, { allowClick = true } = {}) {
     if (!video || keepMuted) return;
+    if (!documentActivated()) {
+      watchForUnmuteOpportunity();
+      return;
+    }
     rememberUnmutedPreference();
     if (video.volume === 0) video.volume = 0.5;
     const showsMuted = playerShowsMuted();
@@ -716,7 +727,10 @@
     });
     // While the user is looking, leave mute alone. A quality change fires
     // playing again and must not unmute a stream they just silenced.
-    if (!looking() && !keepMuted && video.muted) tryUnmute(video);
+    if (!looking() && !keepMuted && video.muted) {
+      if (documentActivated()) tryUnmute(video);
+      else watchForUnmuteOpportunity();
+    }
   }
 
   function onPause(event) {
@@ -790,7 +804,8 @@
     const refusal = await attemptPlay(video);
     if (refusal) boot("stalled", { reason: refusal });
     if (looking()) restoreAudioForViewing();
-    else if (!keepMuted) tryUnmute(video);
+    else if (!keepMuted && documentActivated()) tryUnmute(video);
+    else if (!keepMuted) watchForUnmuteOpportunity();
   }
 
   // ---------------------------------------------------------------------
