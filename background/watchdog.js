@@ -7,6 +7,7 @@ import { getManagedTabs, getWatchdog, saveWatchdogRecord } from "../shared/stora
 import {
   LOOPBACK_PATTERNS,
   heartbeatPayload,
+  heartbeatStatusPayload,
   loopbackPermissionPattern,
   normalizeWatchdog,
   readWatchdogReply,
@@ -75,6 +76,43 @@ async function notifyLocal(message) {
   }
 }
 
+function postReport(config, payload) {
+  const headers = { "Content-Type": "application/json", Accept: "application/json" };
+  if (config.token) headers.Authorization = `Bearer ${config.token}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REPORT_TIMEOUT_MS);
+  const request = fetch(config.endpoint, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+    cache: "no-store",
+    signal: controller.signal,
+  });
+  return request.finally(() => clearTimeout(timer));
+}
+
+async function responseDetail(response) {
+  let body = null;
+  let raw = "";
+  try {
+    if (typeof response.text === "function") {
+      raw = await response.text();
+      if (raw) body = JSON.parse(raw);
+    } else if (typeof response.json === "function") {
+      body = await response.json();
+    }
+  } catch {
+    body = null;
+  }
+  const reply = readWatchdogReply(body, response.ok);
+  return {
+    body,
+    raw,
+    reply,
+    detail: reply.detail || watchdogRefusalDetail(body, raw, response.status),
+  };
+}
+
 export async function runWatchdogHeartbeat() {
   const config = await getWatchdog();
   if (!config.enabled) {
@@ -96,24 +134,28 @@ export async function runWatchdogHeartbeat() {
     ...counts,
     at: Date.now(),
   });
-  const headers = { "Content-Type": "application/json", Accept: "application/json" };
-  if (config.token) headers.Authorization = `Bearer ${config.token}`;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REPORT_TIMEOUT_MS);
   let response;
   try {
-    response = await fetch(config.endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-      cache: "no-store",
-      signal: controller.signal,
-    });
+    response = await postReport(config, payload);
   } catch {
     return watchdogFormState(await note(config, { lastOk: false, lastError: "unreachable" }));
-  } finally {
-    clearTimeout(timer);
+  }
+  if (response.status === 400) {
+    const first = await responseDetail(response);
+    let retry;
+    try {
+      retry = await postReport(config, heartbeatStatusPayload(payload));
+    } catch {
+      return watchdogFormState(await note(config, { lastOk: false, lastError: "unreachable" }));
+    }
+    if (retry.status === 400) {
+      const second = await responseDetail(retry);
+      const detail = first.detail !== "400" ? first.detail : second.detail;
+      return watchdogFormState(
+        await note(config, { lastOk: false, lastError: "rejected", lastDetail: detail })
+      );
+    }
+    response = retry;
   }
 
   if (response.status === 401 || response.status === 403) {

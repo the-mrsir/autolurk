@@ -96,6 +96,18 @@ export function heartbeatPayload({ version = "", managed = 0, playing = 0, stall
   };
 }
 
+export function heartbeatStatusPayload(payload = {}) {
+  return {
+    status: "OK",
+    message: "autolurk",
+    version: String(payload.version || ""),
+    at: Math.max(0, Math.floor(Number(payload.at) || 0)),
+    managed: Math.max(0, Number(payload.managed) || 0),
+    playing: Math.max(0, Number(payload.playing) || 0),
+    stalled: Math.max(0, Number(payload.stalled) || 0),
+  };
+}
+
 export function streamCounts(managed = {}) {
   const entries = Object.values(managed || {});
   let playing = 0;
