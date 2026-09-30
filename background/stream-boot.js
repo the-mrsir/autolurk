@@ -353,10 +353,25 @@ async function healthCheckPass() {
       continue;
     }
 
+    if (state === HEALTH.FAILED) {
+      const failedFor = at - Number(entry.failedAt || 0);
+      if (failedFor >= HEALTH_TIMING.failedRetryMs && shouldAttemptRecovery(entry, at)) {
+        const reset = await updateManagedTab(tabId, {
+          health: HEALTH.STALLED,
+          healthReason: "trying playback again",
+          recoveryAttempts: 0,
+          recoveryStage: "",
+          lastRecoveryAt: 0,
+        });
+        const next = reset[String(tabId)];
+        if (next) await runRecovery(tabId, next, "trying playback again", { visible });
+      }
+      continue;
+    }
+
     if (
       state === HEALTH.BOOTING ||
       state === HEALTH.RECOVERING ||
-      state === HEALTH.FAILED ||
       state === HEALTH.SUSPENDED
     ) {
       if (entry.health !== state) await updateManagedTab(tabId, { health: state, healthReason: reason });

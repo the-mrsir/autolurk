@@ -182,6 +182,28 @@ describe("opening the next stream", () => {
     }
   });
 
+  it("restores a minimized window before it decides the stream is hidden", async () => {
+    mock.reset({
+      tabs: [tab(2, "alpha")],
+      storage: {
+        settings: { serverRotation: true, automationEnabled: true, muteTabs: true },
+        managedTabs: { 2: entry(2, "alpha") },
+      },
+    });
+    mock.windowState.get(1).state = "minimized";
+    install({
+      2: [
+        { playing: false, currentTime: 0, hasVideo: true, hidden: true },
+        { playing: true, currentTime: 4, hasVideo: true, hidden: false },
+      ],
+    });
+
+    const result = await rotateServerStreams(fast);
+    assert.equal(mock.windowState.get(1).state, "normal");
+    assert.equal(result.playing, true);
+    assert.equal(result.reloaded, false);
+  });
+
   it("does not reload a stream it could not show", async () => {
     mock.reset({
       tabs: [tab(2, "alpha")],

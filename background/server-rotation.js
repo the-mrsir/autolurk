@@ -113,6 +113,12 @@ export async function rotateServerStreams(options = {}) {
   await expandGroup(target.tabId);
   await focusTab(target.tabId);
   let report = await confirmPlaying(target.tabId, options.confirmMs ?? CONFIRM_MS);
+  // The group expand and the window restore can land after the first probe.
+  if (report?.hidden === true) {
+    await expandGroup(target.tabId);
+    await focusTab(target.tabId);
+    report = await confirmPlaying(target.tabId, options.confirmMs ?? CONFIRM_MS);
+  }
   if (serverReportWorking(report)) {
     await logActivity(`Server check: ${name} is playing`, { channel: target.login });
     return { tabId: target.tabId, reloaded: false, playing: true };

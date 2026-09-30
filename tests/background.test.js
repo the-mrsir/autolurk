@@ -421,14 +421,14 @@ describe("health check", () => {
     assert.ok(entry.failedAt > 0);
   });
 
-  it("does not periodically re-arm a failed stream", async () => {
+  it("leaves a fresh failure alone and tries an old one again", async () => {
     mock.reset({
       tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: false }],
       storage: {
         managedTabs: {
           "1": managed(1, {
             health: HEALTH.FAILED,
-            failedAt: NOW() - 24 * 60 * 60_000,
+            failedAt: NOW() - 60_000,
             recoveryAttempts: 3,
             recoveryStage: RECOVERY_STAGE.GIVE_UP,
           }),
@@ -437,10 +437,29 @@ describe("health check", () => {
     });
 
     await runHealthCheck();
-    const entry = (await getManagedTabs())["1"];
+    let entry = (await getManagedTabs())["1"];
     assert.equal(entry.health, HEALTH.FAILED);
     assert.equal(entry.recoveryAttempts, 3);
-    assert.equal(entry.recoveryStage, RECOVERY_STAGE.GIVE_UP);
+
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: false }],
+      storage: {
+        managedTabs: {
+          "1": managed(1, {
+            health: HEALTH.FAILED,
+            failedAt: NOW() - HEALTH_TIMING.failedRetryMs - 1000,
+            lastRecoveryAt: 0,
+            recoveryAttempts: 3,
+            recoveryStage: RECOVERY_STAGE.GIVE_UP,
+          }),
+        },
+      },
+    });
+    await runHealthCheck();
+    entry = (await getManagedTabs())["1"];
+    assert.equal(entry.health, HEALTH.RECOVERING);
+    assert.equal(entry.recoveryStage, RECOVERY_STAGE.NUDGE);
+    assert.equal(entry.recoveryAttempts, 1);
   });
 
   it("repairs a tab mute the reload dropped", async () => {

@@ -41,6 +41,9 @@ export const HEALTH_TIMING = {
   // One escalation per health check at most. The old 8s let a single bad
   // minute walk the whole ladder from nudge to reopening the tab.
   recoveryCooldownMs: 45_000,
+  // A stream that already walked the ladder is left alone for this long, then
+  // tried once more. Retrying every minute was a reload loop.
+  failedRetryMs: 10 * 60_000,
 };
 
 function result(state, reason) {
@@ -58,10 +61,8 @@ export function evaluateHealth(entry = {}, tab = {}, now = Date.now(), timing = 
   }
 
   if (entry.health === HEALTH.FAILED) {
-    // A timer must never re-arm an exhausted recovery ladder. That created a
-    // nudge/reload/reopen cycle every few minutes for tabs whose player could
-    // not be observed. Fresh playback evidence, wake recovery, and the user's
-    // Retry action all explicitly clear FAILED when appropriate.
+    // Stays failed until the health check decides the quiet period is over.
+    // Fresh playback evidence, wake recovery, and Retry also clear it.
     return result(HEALTH.FAILED, entry.healthReason || "playback failed");
   }
 

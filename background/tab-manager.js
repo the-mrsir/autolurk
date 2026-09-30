@@ -1141,7 +1141,19 @@ export async function focusTab(tabId) {
 
   try {
     await chrome.tabs.update(tab.id, { active: true, autoDiscardable: false });
-    if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+    if (tab.windowId) {
+      // Focusing a minimized window leaves the page hidden, so a check that
+      // required the stream to be on screen never sees it.
+      let win = null;
+      try {
+        win = await chrome.windows.get(tab.windowId);
+      } catch {
+        win = null;
+      }
+      const update = { focused: true };
+      if (win?.state === "minimized") update.state = "normal";
+      await chrome.windows.update(tab.windowId, update);
+    }
   } catch {
     // Focusing is best effort; the tab is still managed.
   }
