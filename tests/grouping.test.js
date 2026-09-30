@@ -339,7 +339,7 @@ describe("one AutoLurk group, ever", () => {
     const [group] = [...mock.groupState.values()].filter((g) =>
       String(g.title || "").startsWith("AutoLurk")
     );
-    assert.equal(/ · 2$/.test(group?.title || ""), true, `title went stale: ${group?.title}`);
+    assert.equal(group?.title, "AutoLurk · 2", `title went stale: ${group?.title}`);
   });
 
   it("joins the existing group even when the user is in another window", async () => {
@@ -378,7 +378,7 @@ describe("one AutoLurk group, ever", () => {
     assert.equal(groupsHoldingManagedTabs(mock).size, 1);
   });
 
-  it("leaves a group Chrome opened from the other computer where it is", async () => {
+  it("joins the AutoLurk group Chrome already opened", async () => {
     mock.reset({
       tabs: [
         { id: 1, windowId: 1, url: "https://www.twitch.tv/local", active: true },
@@ -402,7 +402,7 @@ describe("one AutoLurk group, ever", () => {
       tabIds: [2, 3, 4],
       createProperties: { windowId: 2 },
     });
-    await mock.chrome.tabGroups.update(syncedGroup, { title: "AutoLurk · 3" });
+    await mock.chrome.tabGroups.update(syncedGroup, { title: "AutoLurk k2xk · 3" });
     mock.local.meta = { groupId: localGroup };
 
     await consolidate();
@@ -410,11 +410,12 @@ describe("one AutoLurk group, ever", () => {
     const groups = [...mock.groupState.values()].filter((group) =>
       String(group.title || "").startsWith("AutoLurk")
     );
-    assert.equal(groups.length, 2, "the other computer's group was folded into this one");
-    assert.equal(mock.tabState.get(1).groupId, localGroup);
-    assert.equal(mock.tabState.get(1).windowId, 1);
-    assert.equal(mock.tabState.get(2).groupId, syncedGroup);
-    assert.equal(mock.tabState.get(4).windowId, 2);
+    assert.equal(groups.length, 1, "a second AutoLurk group was created");
+    assert.equal(groups[0].id, syncedGroup, "the group Chrome already opened was not kept");
+    assert.equal(groups[0].title, "AutoLurk · 4");
+    assert.equal(String(groups[0].title).includes("k2xk"), false);
+    assert.equal(mock.tabState.get(1).groupId, syncedGroup);
+    assert.equal(mock.tabState.get(2).mutedInfo?.muted, true, "a pulled stream stayed unmuted");
   });
 
   it("keeps one tab per channel when both computers opened the same streams", async () => {
@@ -468,16 +469,14 @@ describe("one AutoLurk group, ever", () => {
     const twitch = [...mock.tabState.values()].filter((tab) =>
       String(tab.url || "").includes("twitch.tv/")
     );
-    assert.equal(twitch.length, 8, "the other computer's streams were closed");
+    assert.equal(twitch.length, 4, "both computers' copies stayed open");
     const groups = [...mock.groupState.values()].filter((group) =>
       String(group.title || "").startsWith("AutoLurk")
     );
-    assert.equal(groups.length, 2, "the two computers' groups were combined");
+    assert.equal(groups.length, 1, "the two groups were not combined");
+    assert.equal(groups[0].title, "AutoLurk · 4");
     for (const id of [1, 2, 3, 4]) {
-      assert.equal(mock.tabState.get(id).groupId, localGroup);
-    }
-    for (const id of [5, 6, 7, 8]) {
-      assert.equal(mock.tabState.get(id).groupId, remoteGroup);
+      assert.equal(mock.tabState.get(id).groupId, groups[0].id);
     }
   });
 
@@ -722,7 +721,7 @@ describe("the periodic split sweep", () => {
     assert.equal(groupsHoldingManagedTabs(mock).size, 1);
   });
 
-  it("does not close streams Chrome put beside this computer's", async () => {
+  it("drops duplicate channels after the two groups have already been combined", async () => {
     const channels = ["eslcs", "esfandtv", "northernlion", "otk"];
     const tabs = [{ id: 9, windowId: 1, url: "https://example.com", active: true }];
     const managedTabs = {};
@@ -765,15 +764,13 @@ describe("the periodic split sweep", () => {
     await mock.chrome.tabGroups.update(groupId, { title: "AutoLurk · 8" });
     mock.local.meta = { groupId };
 
-    assert.equal(await sweep(), false, "the other computer's copies were treated as this computer's");
+    assert.equal(await sweep(), true, "a group of doubled streams was treated as healthy");
     const twitch = [...mock.tabState.values()].filter((tab) =>
       String(tab.url || "").includes("twitch.tv/")
     );
-    assert.equal(twitch.length, 8);
+    assert.equal(twitch.length, 4);
     assert.equal(autoLurkGroups(mock).length, 1);
-    for (const id of [5, 6, 7, 8]) {
-      assert.equal(mock.tabState.has(id), true, "a synced copy was closed");
-    }
+    assert.equal(autoLurkGroups(mock)[0].title, "AutoLurk · 4");
   });
 
   it("pulls back a stream that ended up in no group at all", async () => {

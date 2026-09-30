@@ -25,6 +25,7 @@ import {
   saveSnapshot,
 } from "../shared/storage.js";
 import { evaluateHealth, healthLabel } from "../shared/health.js";
+import { updateStillNewer } from "../shared/update-logic.js";
 import {
   classifyPoll,
   mergeLiveState,
@@ -1052,10 +1053,12 @@ export async function buildSnapshot() {
     sevenTvExtension: Boolean(state.meta.sevenTvExtension),
     multistream,
     activity: state.activity || [],
-    update: {
-      ...extensionUpdate,
-      currentVersion: chrome.runtime.getManifest?.().version || extensionUpdate.currentVersion || "",
-    },
+    update: (() => {
+      const currentVersion = chrome.runtime.getManifest?.().version || extensionUpdate.currentVersion || "";
+      const update = { ...extensionUpdate, currentVersion };
+      if (updateStillNewer(update)) return update;
+      return { ...update, availableVersion: "", packageUrl: "" };
+    })(),
   };
 
   await saveSnapshot(snapshot);

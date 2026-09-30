@@ -5,6 +5,7 @@ import { chromeMock } from "./chrome-mock.js";
 import {
   compareVersions,
   describeUpdate,
+  updateStillNewer,
   extractZip,
   githubZipUrl,
   listedUpdateOrigins,
@@ -149,6 +150,23 @@ describe("extension updates", () => {
     assert.equal(
       describeUpdate({ checkedAt: 1, latestVersion: "1.2.6" }, "https://example.com/updates.json"),
       "You're on the latest version (1.2.6)."
+    );
+    assert.equal(
+      describeUpdate(
+        {
+          packageUrl: "https://example.com/a.zip",
+          availableVersion: "1.2.7",
+          currentVersion: "1.2.7",
+          checkedAt: 1,
+          latestVersion: "1.2.7",
+        },
+        "https://example.com/updates.json"
+      ),
+      "You're on the latest version (1.2.7)."
+    );
+    assert.equal(
+      updateStillNewer({ packageUrl: "https://example.com/a.zip", availableVersion: "1.2.7", currentVersion: "1.2.7" }),
+      false
     );
   });
 

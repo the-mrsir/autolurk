@@ -69,7 +69,7 @@ import {
   adoptExistingTab,
   closeManagedForUser,
   consolidateIfSplit,
-  noteForeignAutoLurkGroup,
+  muteAutoLurkTabs,
   focusOrOpen,
   getManagedTabForUser,
   isBootstrapActivation,
@@ -806,8 +806,8 @@ chrome.tabGroups.onRemoved.addListener(async (group) => {
 async function reconcileNamedAutoLurkGroup(group) {
   if (!String(group?.title || "").startsWith(GROUP_NAME)) return;
   try {
-    if (await noteForeignAutoLurkGroup(group)) return;
     await consolidateIfSplit();
+    await muteAutoLurkTabs();
   } catch (error) {
     console.warn("Synced tab group reconciliation failed", error);
   }

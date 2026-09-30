@@ -120,14 +120,20 @@ export async function reconcileManagedTabs() {
 // are candidates; two ordinary Twitch tabs the user opened remain their own.
 async function closeDuplicateStreamTabs(tabs) {
   const managed = await getManagedTabs();
+  const ourGroupIds = new Set();
+  try {
+    for (const group of await chrome.tabGroups.query({})) {
+      if (String(group.title || "").startsWith(GROUP_NAME)) ourGroupIds.add(group.id);
+    }
+  } catch {
+    // Managed entries alone are enough for the basic cleanup.
+  }
 
   const byLogin = new Map();
   for (const tab of tabs) {
     const login = extractChannelFromUrl(tab.url);
     if (!login) continue;
-    // A tab Chrome opened from the other computer is not in this map. Closing
-    // it would close that stream over there, because the group is synced.
-    if (!managed[String(tab.id)]) continue;
+    if (!managed[String(tab.id)] && !ourGroupIds.has(tab.groupId)) continue;
     const matches = byLogin.get(login) || [];
     matches.push(tab);
     byLogin.set(login, matches);
@@ -209,15 +215,13 @@ async function clearOrphanedBootWatches(managed) {
 export async function findTabForChannel(login) {
   const target = normalizeLogin(login);
   if (!target) return null;
-  const token = await localGroupToken();
   const tabs = await chrome.tabs.query({ url: "*://www.twitch.tv/*" });
-  for (const tab of tabs) {
-    if (String(tab.url || "").includes("autolurk-grid")) continue;
-    if (extractChannelFromUrl(tab.url) !== target) continue;
-    if (await tabIsForeignAutoLurk(tab, token)) continue;
-    return tab;
-  }
-  return null;
+  return (
+    tabs.find((tab) => {
+      if (String(tab.url || "").includes("autolurk-grid")) return false;
+      return extractChannelFromUrl(tab.url) === target;
+    }) || null
+  );
 }
 
 // Chrome can sync a saved AutoLurk group from another computer without any of
@@ -225,11 +229,10 @@ export async function findTabForChannel(login) {
 // must inventory the group itself so those stale tabs can still be checked.
 export async function getAutoLurkGroupedTabs() {
   const found = new Map();
-  const token = await localGroupToken();
   let groups;
   try {
-    groups = (await chrome.tabGroups.query({})).filter(
-      (group) => groupTokenFromTitle(group.title) === token
+    groups = (await chrome.tabGroups.query({})).filter((group) =>
+      String(group.title || "").startsWith(GROUP_NAME)
     );
   } catch {
     return [];
@@ -298,14 +301,6 @@ export function adoptGroupedStreamTab(tabId, channel, stream) {
 export async function closeGroupedStreamTab(tabId) {
   const managed = await getManagedTabs();
   if (managed[String(tabId)]) return closeManagedTab(tabId);
-  const token = await localGroupToken();
-  let tab;
-  try {
-    tab = await chrome.tabs.get(Number(tabId));
-  } catch {
-    return false;
-  }
-  if (await tabIsForeignAutoLurk(tab, token)) return false;
   try {
     await chrome.tabs.remove(Number(tabId));
     return true;
@@ -730,11 +725,10 @@ async function homeWindowId() {
 
   // No managed tabs right now, but the group itself may still be sitting open.
   try {
-    const token = await localGroupToken();
     const groups = await chrome.tabGroups.query({});
     const ours = groups.find(
       (group) =>
-        groupTokenFromTitle(group.title) === token && !isStagingWindow(group.windowId)
+        String(group.title || "").startsWith(GROUP_NAME) && !isStagingWindow(group.windowId)
     );
     if (ours) return ours.windowId;
   } catch {
@@ -987,6 +981,7 @@ async function adoptTabNow(tab, channel, stream, login) {
   }
   await announceManaged(tab.id);
   await pinQualityForTab(tab.id);
+  await ensureTabMuted(tab.id);
   await scheduleBootWatch(tab.id);
   if (settings.groupTabs) await addTabToLiveGroup(tab.id, { background: !tab.active });
 
@@ -1250,12 +1245,14 @@ async function locateManagedTabs(managedTabs) {
 // stream apart from the rest, and it is the only way a managed tab is ever
 // outside the AutoLurk group.
 async function ourManagedTabs(managedTabs) {
-  const token = await localGroupToken();
+  const storedId = (await getMeta()).groupId ?? null;
   const ours = [];
   for (const tab of await locateManagedTabs(managedTabs)) {
     if (bootstrappingTabIds.has(Number(tab.id))) continue;
     const group = await groupInfo(tab.groupId);
-    if (group && !looksLikeOurs(group, token)) continue;
+    // A group the user renamed still holds this computer's streams. A group
+    // they made for something else, such as "watch later", does not.
+    if (group && !looksLikeOurs(group) && group.id !== storedId) continue;
     ours.push(tab);
   }
   return ours;
@@ -1270,77 +1267,44 @@ async function groupInfo(groupId) {
   }
 }
 
-// Each computer puts its own mark in the group title. Chrome syncs tab groups
-// to every signed-in browser, so a title of "AutoLurk" alone is not enough to
-// tell this computer's group from the one that just arrived from the other.
-const GROUP_TOKEN_PATTERN = /^AutoLurk ([abcdefghjkmnpqrstuvwxyz23456789]{4})(?: · |$)/;
-const notedForeignGroups = new Set();
-let groupTokenPromise = null;
-
-export function groupTokenFromTitle(title) {
-  const match = String(title || "").match(GROUP_TOKEN_PATTERN);
-  return match ? match[1] : "";
-}
-
-function localGroupToken() {
-  if (!groupTokenPromise) {
-    groupTokenPromise = readOrMakeGroupToken().catch((error) => {
-      groupTokenPromise = null;
-      throw error;
-    });
-  }
-  return groupTokenPromise;
-}
-
-async function readOrMakeGroupToken() {
-  const meta = await getMeta();
-  if (GROUP_TOKEN_PATTERN.test(`AutoLurk ${meta.groupToken || ""}`)) return meta.groupToken;
-  const alphabet = "abcdefghjkmnpqrstuvwxyz23456789";
-  const bytes = crypto.getRandomValues(new Uint8Array(4));
-  const token = [...bytes].map((byte) => alphabet[byte % alphabet.length]).join("");
-  await mutateMeta((current) => ({ ...current, groupToken: token }));
-  return token;
-}
-
-async function tabIsForeignAutoLurk(tab, token) {
-  const group = await groupInfo(tab.groupId);
-  if (!group) return false;
-  const title = String(group.title || "");
-  if (!title.startsWith(GROUP_NAME)) return false;
-  return groupTokenFromTitle(title) !== token;
-}
-
 // A group is ours if we named it, or if it has no name at all while holding a
 // managed tab: Chrome creates a group untitled and we rename it a moment later,
 // so a failed rename must not make the group invisible to us forever. A group
-// the user named themselves is theirs, and is left alone. A group carrying
-// another computer's mark is theirs too.
-function looksLikeOurs(group, token) {
-  if (!group?.title) return true;
-  const title = String(group.title);
-  if (!title.startsWith(GROUP_NAME)) return false;
-  const marked = groupTokenFromTitle(title);
-  if (marked) return marked === token;
-  return true;
+// the user named themselves is theirs, and is left alone. An older title that
+// still starts with AutoLurk, including one Chrome opened from another
+// computer, is the group to join.
+function looksLikeOurs(group) {
+  return !group?.title || String(group.title).startsWith(GROUP_NAME);
 }
 
-export async function noteForeignAutoLurkGroup(group) {
-  if (!String(group?.title || "").startsWith(GROUP_NAME)) return false;
-  const token = await localGroupToken();
-  if (groupTokenFromTitle(group.title) === token) return false;
-  let tabs = [];
+export async function muteAutoLurkTabs() {
+  const settings = await getSettings();
+  if (settings.muteTabs === false) return;
+  let groups = [];
   try {
-    tabs = await chrome.tabs.query({ groupId: group.id });
+    groups = await chrome.tabGroups.query({});
   } catch {
-    return false;
+    return;
   }
   const managed = await getManagedTabs();
-  if (tabs.some((tab) => managed[String(tab.id)])) return false;
-  if (!tabs.length) return false;
-  if (notedForeignGroups.has(group.id)) return true;
-  notedForeignGroups.add(group.id);
-  await logActivity("Left another computer's AutoLurk group alone");
-  return true;
+  for (const group of groups) {
+    if (!String(group.title || "").startsWith(GROUP_NAME)) continue;
+    let tabs = [];
+    try {
+      tabs = await chrome.tabs.query({ groupId: group.id });
+    } catch {
+      continue;
+    }
+    for (const tab of tabs) {
+      if (tab.mutedInfo?.muted) continue;
+      if (managed[String(tab.id)]?.userUnmuted) continue;
+      try {
+        await chrome.tabs.update(tab.id, { muted: true });
+      } catch {
+        // Tab closed while the group was being joined.
+      }
+    }
+  }
 }
 
 // Where the one group should live. Staying put matters more than being optimal,
@@ -1373,11 +1337,10 @@ async function chooseHomeWindow(tabs, storedGroupId) {
 async function discoverAutoLurkGroups(tabs, storedGroupId) {
   const groups = new Map();
   let enumerationSucceeded = false;
-  const token = await localGroupToken();
 
   try {
     for (const group of await chrome.tabGroups.query({})) {
-      if (groupTokenFromTitle(group.title) === token) groups.set(group.id, group);
+      if (String(group.title || "").startsWith(GROUP_NAME)) groups.set(group.id, group);
     }
     enumerationSucceeded = true;
   } catch {
@@ -1388,7 +1351,7 @@ async function discoverAutoLurkGroups(tabs, storedGroupId) {
   for (const tab of tabs) {
     if (tab.groupId == null || tab.groupId === -1 || groups.has(tab.groupId)) continue;
     const group = await groupInfo(tab.groupId);
-    if (group && looksLikeOurs(group, token)) groups.set(group.id, group);
+    if (group && looksLikeOurs(group)) groups.set(group.id, group);
   }
 
   const stored = await groupInfo(storedGroupId);
@@ -1422,25 +1385,22 @@ async function discoverAutoLurkGroups(tabs, storedGroupId) {
 
 // The single group in the home window, adopted if one is already there.
 async function resolveHomeGroup(home, tabs, storedGroupId) {
-  const token = await localGroupToken();
+  const stored = await groupInfo(storedGroupId);
+  if (stored && stored.windowId === home && looksLikeOurs(stored)) return stored.id;
+
   for (const tab of tabs) {
     if (tab.windowId !== home || tab.groupId == null || tab.groupId === -1) continue;
     const group = await groupInfo(tab.groupId);
-    if (group && looksLikeOurs(group, token)) return group.id;
+    if (group && looksLikeOurs(group)) return group.id;
   }
 
-  const stored = await groupInfo(storedGroupId);
-  if (!stored || stored.windowId !== home) return null;
-  const marked = groupTokenFromTitle(stored.title);
-  if (marked && marked !== token) return null;
-  const managed = await getManagedTabs();
-  let members = [];
   try {
-    members = await chrome.tabs.query({ groupId: stored.id });
+    const groups = await chrome.tabGroups.query({ windowId: home });
+    const ours = groups.find((group) => String(group.title || "").startsWith(GROUP_NAME));
+    if (ours) return ours.id;
   } catch {
-    members = [];
+    // Fall through and make one.
   }
-  if (members.length === 0 || members.some((tab) => managed[String(tab.id)])) return stored.id;
   return null;
 }
 
@@ -1449,14 +1409,22 @@ async function resolveHomeGroup(home, tabs, storedGroupId) {
 // dragged out. Their tabs get pulled back in rather than the group being
 // abandoned, so the count in the title stays honest.
 async function ourOtherGroupIds(keepGroupId, tabs) {
-  const token = await localGroupToken();
   const strays = new Set();
+
+  try {
+    for (const group of await chrome.tabGroups.query({})) {
+      if (group.id === keepGroupId) continue;
+      if (String(group.title || "").startsWith(GROUP_NAME)) strays.add(group.id);
+    }
+  } catch {
+    // Group enumeration is unavailable; fall back to what the tabs tell us.
+  }
 
   for (const tab of tabs) {
     if (tab.groupId == null || tab.groupId === -1 || tab.groupId === keepGroupId) continue;
     if (strays.has(tab.groupId)) continue;
     const group = await groupInfo(tab.groupId);
-    if (group && looksLikeOurs(group, token)) strays.add(group.id);
+    if (group && looksLikeOurs(group)) strays.add(group.id);
   }
 
   return strays;
@@ -1534,8 +1502,8 @@ export function updateLiveGroup(managedTabs, options = {}) {
 }
 
 async function updateLiveGroupNow(managedTabs, options = {}) {
-  // Duplicate tabs this computer opened itself. Tabs Chrome delivered from the
-  // other computer stay where they are.
+  // One tab per channel, including copies sitting in a group Chrome opened
+  // from another computer.
   if (await closeDuplicateStreamTabs(await chrome.tabs.query({}))) {
     managedTabs = await getManagedTabs();
   }
@@ -1632,10 +1600,9 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     // Fall back to what we asked for.
   }
 
-  const token = await localGroupToken();
   try {
     await chrome.tabGroups.update(groupId, {
-      title: `${GROUP_NAME} ${token} · ${count}`,
+      title: `${GROUP_NAME} · ${count}`,
       // An unrecognised colour makes Chrome reject the whole call, taking the
       // title with it and leaving the group anonymous.
       color: GROUP_COLORS.has(settings.groupColor) ? settings.groupColor : "purple",
@@ -1668,6 +1635,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
 
   await remember(groupId);
+  await muteAutoLurkTabs();
 }
 
 // Consolidation used to run only when a stream opened, closed or reached
@@ -1679,27 +1647,34 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
 export async function consolidateIfSplit() {
   const settings = await getSettings();
   if (!settings.groupTabs) return false;
+  await muteAutoLurkTabs();
 
   const dupesClosed = await closeDuplicateStreamTabs(await chrome.tabs.query({}));
   const managed = await getManagedTabs();
   if (!Object.keys(managed).length) return dupesClosed;
 
   const tabs = await ourManagedTabs(managed);
+  let autoLurkGroups = 0;
+  try {
+    autoLurkGroups = (await chrome.tabGroups.query({})).filter((group) =>
+      String(group.title || "").startsWith(GROUP_NAME)
+    ).length;
+  } catch {
+    autoLurkGroups = 0;
+  }
   if (!tabs.length) {
-    if (!dupesClosed) return false;
+    if (!dupesClosed && autoLurkGroups === 0) return false;
     await updateLiveGroup(managed);
     return true;
   }
 
-  // Only groups that already hold a stream this computer opened. The other
-  // computer's group can sit in this window without becoming one of them.
   const holding = new Set();
   for (const tab of tabs) {
     if (tab.groupId != null && tab.groupId !== -1) holding.add(tab.groupId);
   }
   const loose = tabs.some((tab) => tab.groupId === -1 || !holding.has(tab.groupId));
 
-  if (holding.size <= 1 && !loose && !dupesClosed) return false;
+  if (holding.size <= 1 && !loose && !dupesClosed && autoLurkGroups <= 1) return false;
 
   await updateLiveGroup(managed);
   return true;

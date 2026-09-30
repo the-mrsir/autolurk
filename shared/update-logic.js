@@ -102,10 +102,18 @@ export function parseUpdateManifest(body) {
   return { version, packageUrl: url.toString() };
 }
 
+export function updateStillNewer(update) {
+  const available = String(update?.availableVersion || "");
+  if (!update?.packageUrl || !available) return false;
+  const current = String(update?.currentVersion || "");
+  if (!current) return true;
+  return compareVersions(available, current) > 0;
+}
+
 export function describeUpdate(update, manifestUrl) {
   if (!String(manifestUrl || "").trim()) return "Add an update address, then check.";
   if (update?.error) return update.error;
-  if (update?.packageUrl && update?.availableVersion) {
+  if (updateStillNewer(update)) {
     return `Version ${update.availableVersion} is on GitHub. Chrome cannot write it into a folder load.`;
   }
   if (update?.checkedAt && update?.latestVersion) {
