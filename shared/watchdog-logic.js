@@ -102,6 +102,20 @@ export function heartbeatPayload({ version = "", managed = 0, playing = 0, stall
   };
 }
 
+// The status page speaks { status, message }. A report that includes those
+// fields is the second attempt when the first body is refused.
+export function heartbeatStatusPayload(payload = {}) {
+  return {
+    status: "OK",
+    message: "autolurk",
+    version: String(payload.version || ""),
+    at: reportInstant(payload.at),
+    managed: Math.max(0, Number(payload.managed) || 0),
+    playing: Math.max(0, Number(payload.playing) || 0),
+    stalled: Math.max(0, Number(payload.stalled) || 0),
+  };
+}
+
 export function streamCounts(managed = {}) {
   const entries = Object.values(managed || {});
   let playing = 0;
@@ -142,17 +156,29 @@ function replyMessage(body) {
   return "";
 }
 
+function usefulRefusalLine(value) {
+  const text = sanitizeWatchdogText(String(value || "").replace(/^\s*message:\s*/i, ""));
+  if (!text) return "";
+  if (/^bad request\.?$/i.test(text)) return "";
+  if (/^error response$/i.test(text)) return "";
+  if (/^error code: 400$/i.test(text)) return "";
+  if (/^doctype html/i.test(text)) return "";
+  return text;
+}
+
 export function watchdogRefusalDetail(body, rawText = "", status = 0) {
-  const fromJson = replyMessage(body);
+  const fromJson = usefulRefusalLine(replyMessage(body));
   if (fromJson) return fromJson;
   const text = String(rawText || "");
+  const paragraphs = [...text.matchAll(/<p[^>]*>([\s\S]*?)<\/p>/gi)]
+    .map((match) => usefulRefusalLine(match[1].replace(/<[^>]+>/g, " ")))
+    .filter(Boolean);
+  if (paragraphs.length) return paragraphs[paragraphs.length - 1];
   const message = text.match(/Message:\s*([^<\n]+)/i);
-  if (message) {
-    const extracted = sanitizeWatchdogText(message[1]);
-    if (extracted && !/^bad request\.?$/i.test(extracted)) return extracted;
-  }
-  const plain = sanitizeWatchdogText(text);
-  if (plain && !/^doctype html/i.test(plain) && !/^<!?doctype/i.test(plain)) return plain;
+  const extracted = message ? usefulRefusalLine(message[1]) : "";
+  if (extracted) return extracted;
+  const plain = usefulRefusalLine(text);
+  if (plain) return plain;
   return String(status || "");
 }
 
