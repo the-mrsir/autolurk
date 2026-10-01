@@ -22,6 +22,7 @@ const SAMPLE_CAP_MS = 120_000;
 
 const FAILURES = [
   [/unmute|autoplay|notallowed|didn't interact/i, "autoplay"],
+  [/waiting until chrome/i, "screen"],
   [/quality/i, "quality"],
   [/buffer|waiting/i, "buffering"],
   [/offline/i, "offline"],

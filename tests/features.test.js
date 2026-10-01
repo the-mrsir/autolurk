@@ -1,5 +1,5 @@
 import { assert, describe, it } from "./harness.js";
-import { opensInFront } from "../shared/constants.js";
+import { opensInFront, pullsStreamsForward } from "../shared/constants.js";
 import { chromeMock } from "./chrome-mock.js";
 import {
   emptyPointsEntry,
@@ -264,5 +264,13 @@ describe("opening streams in front", () => {
   it("brings every stream forward when all is chosen", () => {
     assert.equal(opensInFront({ openInFront: "all" }, true), true);
     assert.equal(opensInFront({ openInFront: "all" }, false), true);
+  });
+
+  it("treats rotation and open-in-front as permission to recover on screen", () => {
+    assert.equal(pullsStreamsForward({}), false);
+    assert.equal(pullsStreamsForward({ openInFront: "off" }), false);
+    assert.equal(pullsStreamsForward({ openInFront: "favorites" }), true);
+    assert.equal(pullsStreamsForward({ openInFront: "all" }), true);
+    assert.equal(pullsStreamsForward({ serverRotation: true }), true);
   });
 });

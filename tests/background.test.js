@@ -524,6 +524,114 @@ describe("health check", () => {
     assert.equal(entry.health, HEALTH.STALLED);
     assert.equal(String(entry.healthReason || "").includes("suppressed"), false);
   });
+
+  it("reloads a stalled stream when Brave is not focused and streams are pulled forward", async () => {
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: false, windowId: 1 }],
+      storage: {
+        settings: { openInFront: "all" },
+        managedTabs: {
+          "1": managed(1, {
+            openedAt: NOW() - HEALTH_TIMING.bootGraceMs - 1000,
+            lastVerifiedAt: 0,
+            health: HEALTH.STALLED,
+            recoveryAttempts: 1,
+            lastRecoveryAt: 0,
+            mediaPlaying: false,
+          }),
+        },
+      },
+    });
+    mock.blurChrome();
+    let reloads = 0;
+    let playing = false;
+    mock.setContentScript(1, () =>
+      playing
+        ? { hasVideo: true, hidden: false, playing: true, currentTime: 40, channel: "streamer" }
+        : { hasVideo: false, hidden: true, playing: false, currentTime: 0, channel: "streamer" }
+    );
+    const realReload = mock.chrome.tabs.reload;
+    const realUpdate = mock.chrome.windows.update;
+    const focused = [];
+    mock.chrome.tabs.reload = (...args) => {
+      reloads += 1;
+      playing = true;
+      return realReload(...args);
+    };
+    mock.chrome.windows.update = (id, props) => {
+      focused.push(props);
+      return realUpdate(id, props);
+    };
+    const previous = {
+      visibleMs: BOOTSTRAP_TIMING.visibleMs,
+      pollMs: BOOTSTRAP_TIMING.pollMs,
+    };
+    BOOTSTRAP_TIMING.visibleMs = 80;
+    BOOTSTRAP_TIMING.pollMs = 5;
+    try {
+      await runHealthCheck();
+    } finally {
+      mock.chrome.tabs.reload = realReload;
+      mock.chrome.windows.update = realUpdate;
+      BOOTSTRAP_TIMING.visibleMs = previous.visibleMs;
+      BOOTSTRAP_TIMING.pollMs = previous.pollMs;
+    }
+
+    assert.equal(reloads, 1);
+    assert.ok(focused.some((props) => props.focused === true));
+    const entry = (await getManagedTabs())["1"];
+    assert.equal(String(entry.healthReason || "").includes("suppressed"), false);
+    assert.notOk(entry.health === HEALTH.FAILED);
+  });
+
+  it("retries a suppressed failure immediately when streams are pulled forward", async () => {
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: false, windowId: 1 }],
+      storage: {
+        settings: { serverRotation: true },
+        managedTabs: {
+          "1": managed(1, {
+            health: HEALTH.FAILED,
+            healthReason: "never started playing; automatic reload suppressed to avoid taking over the screen",
+            failedAt: NOW() - 1000,
+            recoveryAttempts: 1,
+            lastRecoveryAt: 0,
+            mediaPlaying: false,
+          }),
+        },
+      },
+    });
+    mock.blurChrome();
+    let reloads = 0;
+    let playing = false;
+    mock.setContentScript(1, () =>
+      playing
+        ? { hasVideo: true, hidden: false, playing: true, currentTime: 40, channel: "streamer" }
+        : { hasVideo: false, hidden: true, playing: false, currentTime: 0, channel: "streamer" }
+    );
+    const realReload = mock.chrome.tabs.reload;
+    mock.chrome.tabs.reload = (...args) => {
+      reloads += 1;
+      playing = true;
+      return realReload(...args);
+    };
+    const previous = {
+      visibleMs: BOOTSTRAP_TIMING.visibleMs,
+      pollMs: BOOTSTRAP_TIMING.pollMs,
+    };
+    BOOTSTRAP_TIMING.visibleMs = 80;
+    BOOTSTRAP_TIMING.pollMs = 5;
+    try {
+      await runHealthCheck();
+    } finally {
+      mock.chrome.tabs.reload = realReload;
+      BOOTSTRAP_TIMING.visibleMs = previous.visibleMs;
+      BOOTSTRAP_TIMING.pollMs = previous.pollMs;
+    }
+
+    assert.equal(reloads, 1);
+    assert.notOk((await getManagedTabs())["1"].health === HEALTH.FAILED);
+  });
 });
 
 describe("duplicate open protection", () => {

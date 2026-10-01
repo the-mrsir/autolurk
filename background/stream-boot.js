@@ -1,4 +1,4 @@
-import { MESSAGE, opensInFront } from "../shared/constants.js";
+import { MESSAGE, opensInFront, pullsStreamsForward } from "../shared/constants.js";
 import {
   allowedStageForVisibleTab,
   evaluateHealth,
@@ -334,6 +334,7 @@ export async function runHealthCheck() {
 
 async function healthCheckPass() {
   const managed = await getManagedTabs();
+  const settings = await getSettings();
   const focused = await focusedWindowId();
   const at = Date.now();
   let restarts = 0;
@@ -383,16 +384,29 @@ async function healthCheckPass() {
 
     if (state === HEALTH.FAILED) {
       const failedFor = at - Number(entry.failedAt || 0);
-      if (failedFor >= HEALTH_TIMING.failedRetryMs && shouldAttemptRecovery(entry, at)) {
+      // A stream failed only because the reload was refused, or because Brave
+      // did not look focused. With streams set to come forward, that is not a
+      // ten-minute wait.
+      const parked = /suppressed to avoid taking over|waiting until Chrome is in front/.test(
+        String(entry.healthReason || "")
+      );
+      const show = pullsStreamsForward(settings) && !visible;
+      const due = failedFor >= HEALTH_TIMING.failedRetryMs || (show && parked);
+      if (due && shouldAttemptRecovery(entry, at)) {
         const reset = await updateManagedTab(tabId, {
           health: HEALTH.STALLED,
           healthReason: "trying playback again",
-          recoveryAttempts: 0,
+          recoveryAttempts: show && parked ? 1 : 0,
           recoveryStage: "",
           lastRecoveryAt: 0,
         });
         const next = reset[String(tabId)];
-        if (next) await runRecovery(tabId, next, "trying playback again", { visible });
+        if (next) {
+          await runRecovery(tabId, next, "trying playback again", {
+            visible,
+            allowNavigation: show && parked,
+          });
+        }
       }
       continue;
     }
@@ -425,12 +439,7 @@ async function healthCheckPass() {
     // the next pass, in the same order.
     const stage = nextRecoveryStage(entry);
     const needsScreen = stage === RECOVERY_STAGE.RELOAD || stage === RECOVERY_STAGE.REOPEN;
-    // Server rotation is the thing that opens a stream and reloads it. The
-    // ordinary ladder must not take the screen on its own minute as well.
-    if (needsScreen && (await getSettings()).serverRotation) {
-      await updateManagedTab(tabId, { health: HEALTH.STALLED, healthReason: reason });
-      continue;
-    }
+    const showIt = needsScreen && !visible && pullsStreamsForward(settings);
     if (needsScreen && !visible) {
       if (restarts >= RESTARTS_PER_PASS) {
         await updateManagedTab(tabId, { health: HEALTH.STALLED, healthReason: reason });
@@ -439,7 +448,7 @@ async function healthCheckPass() {
       restarts += 1;
     }
 
-    await runRecovery(tabId, entry, reason, { visible });
+    await runRecovery(tabId, entry, reason, { visible, allowNavigation: showIt });
   }
 }
 
@@ -521,7 +530,7 @@ async function nudgePlayer(tabId, entry, reason) {
 // stage used to do was wasted, and the ladder only ever recovered a stream
 // when it reached the reopen stage and showed a tab by accident.
 async function restartTab(tabId) {
-  return restartManagedTab(tabId, { reason: "recovery" });
+  return restartManagedTab(tabId, { reason: "recovery", pullForward: true });
 }
 
 // A reopen creates a fresh entry, which would otherwise hand the new tab a
@@ -603,7 +612,7 @@ export async function runRecovery(tabId, entry, reason, options = {}) {
   ) {
     // Server rotation is what brings a stream forward and reloads it. Failing
     // the stream here discards the tab before that check can run.
-    if ((await getSettings()).serverRotation) {
+    if (pullsStreamsForward(await getSettings())) {
       const waiting = await updateManagedTab(tabId, {
         health: HEALTH.STALLED,
         healthReason: reason,

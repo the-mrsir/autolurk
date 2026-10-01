@@ -626,9 +626,28 @@ async function showAndRestart(tabId, options = {}) {
   bootstrappingTabIds.add(Number(tabId));
   try {
     if (!looking) {
-    // Park the tab in an off-screen window so a reload can start a player
-    // without covering what the user is doing. A hidden in-place reload
-    // never gets a media source.
+    // A hidden reload never receives a media source. An off-screen window is
+    // still hidden, and Brave often reports the browser as unfocused even
+    // when it is the window on screen, so recovery focuses the real window
+    // instead of waiting for that flag to become true.
+    if (options.pullForward) {
+      try {
+        if (tab.windowId != null) {
+          let win = null;
+          try {
+            win = await chrome.windows.get(tab.windowId);
+          } catch {
+            win = null;
+          }
+          const update = { focused: true };
+          if (win?.state === "minimized") update.state = "normal";
+          await chrome.windows.update(tab.windowId, update);
+        }
+        await chrome.tabs.update(Number(tabId), { active: true, autoDiscardable: false });
+      } catch {
+        return { started: false, shown: false, deferred: true };
+      }
+    } else {
     const parked = await parkInStaging(tab);
     if (parked == null && !(await chromeHasFocus())) {
       return { started: false, shown: false, deferred: true };
@@ -640,6 +659,7 @@ async function showAndRestart(tabId, options = {}) {
       } catch {
         return { started: false, shown: false, deferred: true };
       }
+    }
     }
     }
 

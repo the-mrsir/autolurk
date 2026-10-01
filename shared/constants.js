@@ -204,6 +204,14 @@ export function opensInFront(settings, favorite) {
   return false;
 }
 
+// Server rotation and "open streams in front" both mean a stalled stream may
+// be shown and reloaded. Leaving it failed does not bring it back.
+export function pullsStreamsForward(settings) {
+  if (settings?.serverRotation === true) return true;
+  const mode = settings?.openInFront || "off";
+  return mode === "favorites" || mode === "all";
+}
+
 // Twitch's own quality ids. 160p is the lightest decode; Source is whatever the
 // channel is sending. Content scripts repeat this list because they cannot
 // import it.
