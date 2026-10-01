@@ -1,4 +1,4 @@
-import { opensInFront, PRIORITY_RANK, TAB_LOAD_GRACE_MS } from "../shared/constants.js";
+import { opensInFront, PRIORITY_RANK, SESSION_KEYS, TAB_LOAD_GRACE_MS } from "../shared/constants.js";
 import { normalizeSyncGroup } from "../shared/sync-logic.js";
 import {
   createFavorite,
@@ -12,6 +12,7 @@ import {
   getManagedTabs,
   getMeta,
   getPendingCloses,
+  getSessionValue,
   getSettings,
   mutateDismissed,
   mutateFavorites,
@@ -22,6 +23,7 @@ import {
   mutateLiveState,
   saveMeta,
   savePendingCloses,
+  setSessionValue,
   saveSnapshot,
 } from "../shared/storage.js";
 import { evaluateHealth, healthLabel } from "../shared/health.js";
@@ -193,12 +195,7 @@ function configuredLurkChannels(favorites, follows, liveState) {
       userId: String(userId),
       login,
       channel: resolveChannel(userId, follows, liveState[userId], favorite),
-      stream: liveState[userId] || {
-        userId: String(userId),
-        login,
-        streamId: "",
-        isLive: true,
-      },
+      stream: liveState[userId] || { userId: String(userId), login, streamId: "" },
     });
   }
   return wanted;
@@ -217,13 +214,28 @@ async function armManagedTab(tabId) {
   await scheduleBootWatch(tabId);
 }
 
-function logStartupReconciliation({ configured, matching, adopted, opened, managed }) {
+export const RECONCILE_RETRY_MS = 2 * 60 * 1000;
+
+function logStartupReconciliation(record) {
   console.info("AutoLurk startup reconciliation");
-  console.info(`Configured channels: ${configured}`);
-  console.info(`Existing matching tabs: ${matching}`);
-  console.info(`Adopted: ${adopted}`);
-  console.info(`Opened: ${opened}`);
-  console.info(`Managed after reconciliation: ${managed}`);
+  console.info(`Configured channels: ${record.configured}`);
+  console.info(`Open Twitch tabs: ${record.openTwitchTabs}`);
+  console.info(`Existing matching tabs: ${record.matchingTabs}`);
+  console.info(`Adopted: ${record.adopted}`);
+  console.info(`Opened: ${record.opened}`);
+  console.info(`Skipped: ${record.skipped}`);
+  console.info(`Managed after reconciliation: ${record.managed}`);
+  console.info(`Reconciliation state: ${record.state}`);
+}
+
+export function reconciliationNeedsAnotherPass(record, at = Date.now()) {
+  if (!record) return false;
+  const busy = new Set(["STARTING", "SCANNING", "ADOPTING", "OPENING_MISSING"]);
+  if (busy.has(record.state)) return false;
+  if (!(Number(record.configured) > Number(record.managed))) return false;
+  const completed = Number(record.completedAt) || 0;
+  if (!completed) return false;
+  return at - completed >= RECONCILE_RETRY_MS;
 }
 
 // Restores the managed registry from favorites and whatever Twitch tabs are
@@ -238,95 +250,163 @@ export function reconcileStartupChannels() {
   return run;
 }
 
+export async function reconcileStartupChannelsIfShort(at = Date.now()) {
+  const record = await getSessionValue(SESSION_KEYS.RECONCILE, null);
+  if (!reconciliationNeedsAnotherPass(record, at)) return null;
+  return reconcileStartupChannels();
+}
+
+async function rememberReconciliation(record) {
+  await setSessionValue(SESSION_KEYS.RECONCILE, record);
+  return record;
+}
+
 async function runStartupReconciliation() {
-  const [settings, favorites, follows, liveState, dismissed] = await Promise.all([
-    getSettings(),
-    getFavorites(),
-    getFollows(),
-    getLiveState(),
-    getDismissed(),
-  ]);
-  await reconcileManagedTabs();
-
-  const wanted = configuredLurkChannels(favorites, follows, liveState);
-  const automation = settings.automationEnabled === true && settings.autoOpenFavorites === true;
-  const tabs = await chrome.tabs.query({ url: "*://www.twitch.tv/*" });
-  let matching = 0;
-  let adopted = 0;
-  let opened = 0;
-
-  for (const item of wanted) {
-    const matches = tabsForLogin(tabs, item.login);
-    matching += matches.length;
-    if (!automation) continue;
-
-    const already =
-      (await getManagedTabForUser(item.userId)) || (await getManagedTabForLogin(item.login));
-    const keeper =
-      matches.find((tab) => already && Number(tab.id) === Number(already.tabId)) ||
-      matches.find((tab) => tab.active) ||
-      matches[0];
-
-    if (!already && keeper) {
-      const entry = await adoptGroupedStreamTab(keeper.id, item.channel, item.stream);
-      if (entry) adopted += 1;
-    }
-
-    for (const extra of matches) {
-      if (!keeper || Number(extra.id) === Number(keeper.id)) continue;
-      if (already && Number(extra.id) === Number(already.tabId)) continue;
-      try {
-        await chrome.tabs.remove(Number(extra.id));
-      } catch {
-        // Closed while we were matching it.
-      }
-    }
-  }
-
-  if (automation) {
-    const max = Number(settings.maxAutoOpenStreams) || 0;
-    for (const item of wanted) {
-      if ((await getManagedTabForUser(item.userId)) || (await getManagedTabForLogin(item.login))) {
-        continue;
-      }
-      const dismissedId = dismissed[item.userId];
-      if (
-        !settings.reopenIfManuallyClosed &&
-        dismissedId &&
-        item.stream.streamId &&
-        dismissedId === item.stream.streamId
-      ) {
-        continue;
-      }
-      const openCount = Object.keys(await getManagedTabs()).length;
-      if (max > 0 && openCount >= max) continue;
-      try {
-        const entry = await openManagedStream(item.channel, item.stream, {
-          focus: opensInFront(settings, true),
-        });
-        if (entry) opened += 1;
-      } catch (error) {
-        console.warn("Startup open failed", error);
-      }
-    }
-  }
-
-  const managed = await getManagedTabs();
-  if (automation) {
-    for (const entry of Object.values(managed)) {
-      await armManagedTab(entry.tabId);
-    }
-  }
-
-  const summary = {
-    configured: wanted.length,
-    matching,
-    adopted,
-    opened,
-    managed: Object.keys(managed).length,
+  const startedAt = Date.now();
+  const previous = await getSessionValue(SESSION_KEYS.RECONCILE, null);
+  const record = {
+    state: "STARTING",
+    configured: 0,
+    openTwitchTabs: 0,
+    matchingTabs: 0,
+    adopted: 0,
+    opened: 0,
+    skipped: 0,
+    managed: 0,
+    startedAt,
+    completedAt: null,
+    reachedExpectedAt: Number(previous?.reachedExpectedAt) > 0 ? Number(previous.reachedExpectedAt) : null,
+    timeToExpectedMs: Number.isFinite(Number(previous?.timeToExpectedMs)) ? Number(previous.timeToExpectedMs) : null,
   };
-  logStartupReconciliation(summary);
-  return summary;
+  await rememberReconciliation(record);
+
+  try {
+    const [settings, favorites, follows, liveState, dismissed] = await Promise.all([
+      getSettings(),
+      getFavorites(),
+      getFollows(),
+      getLiveState(),
+      getDismissed(),
+    ]);
+    await reconcileManagedTabs();
+    const wanted = configuredLurkChannels(favorites, follows, liveState);
+    record.configured = wanted.length;
+    record.state = "SCANNING";
+    await rememberReconciliation(record);
+
+    const automation = settings.automationEnabled === true && settings.autoOpenFavorites === true;
+    const tabs = (await chrome.tabs.query({ url: "*://www.twitch.tv/*" })).filter(
+      (tab) => !String(tab.url || "").includes("autolurk-grid")
+    );
+    record.openTwitchTabs = tabs.length;
+    record.state = "ADOPTING";
+    await rememberReconciliation(record);
+
+    for (const item of wanted) {
+      const matches = tabsForLogin(tabs, item.login);
+      record.matchingTabs += matches.length;
+      if (!automation) {
+        if (!matches.length) record.skipped += 1;
+        continue;
+      }
+
+      const already =
+        (await getManagedTabForUser(item.userId)) || (await getManagedTabForLogin(item.login));
+      const keeper =
+        matches.find((tab) => already && Number(tab.id) === Number(already.tabId)) ||
+        matches.find((tab) => tab.active) ||
+        matches[0];
+
+      if (!already && keeper) {
+        const entry = await adoptGroupedStreamTab(keeper.id, item.channel, item.stream);
+        if (entry) record.adopted += 1;
+      }
+
+      for (const extra of matches) {
+        if (!keeper || Number(extra.id) === Number(keeper.id)) continue;
+        if (already && Number(extra.id) === Number(already.tabId)) continue;
+        const still = await getManagedTabs();
+        if (still[String(extra.id)]) continue;
+        try {
+          await chrome.tabs.remove(Number(extra.id));
+        } catch {
+          // Closed while we were matching it.
+        }
+      }
+    }
+
+    record.state = "OPENING_MISSING";
+    await rememberReconciliation(record);
+
+    if (automation) {
+      const max = Number(settings.maxAutoOpenStreams) || 0;
+      for (const item of wanted) {
+        if ((await getManagedTabForUser(item.userId)) || (await getManagedTabForLogin(item.login))) {
+          continue;
+        }
+        const fresh = tabsForLogin(await chrome.tabs.query({ url: "*://www.twitch.tv/*" }), item.login);
+        if (fresh.length) {
+          const entry = await adoptGroupedStreamTab(fresh[0].id, item.channel, item.stream);
+          if (entry) record.adopted += 1;
+          continue;
+        }
+        if (!streamIsOpenable(item.stream)) {
+          record.skipped += 1;
+          continue;
+        }
+        const dismissedId = dismissed[item.userId];
+        if (
+          !settings.reopenIfManuallyClosed &&
+          dismissedId &&
+          item.stream.streamId &&
+          dismissedId === item.stream.streamId
+        ) {
+          record.skipped += 1;
+          continue;
+        }
+        const openCount = Object.keys(await getManagedTabs()).length;
+        if (max > 0 && openCount >= max) {
+          record.skipped += 1;
+          continue;
+        }
+        try {
+          const entry = await openManagedStream(item.channel, item.stream, {
+            focus: opensInFront(settings, true),
+          });
+          if (entry) record.opened += 1;
+          else record.skipped += 1;
+        } catch (error) {
+          record.skipped += 1;
+          console.warn("Startup open failed", error);
+        }
+      }
+    }
+
+    const managed = await getManagedTabs();
+    if (automation) {
+      for (const entry of Object.values(managed)) await armManagedTab(entry.tabId);
+    }
+    record.managed = Object.keys(managed).length;
+    record.completedAt = Date.now();
+    if (record.managed >= record.configured) {
+      record.state = "COMPLETE";
+      if (!record.reachedExpectedAt) {
+        record.reachedExpectedAt = record.completedAt;
+        record.timeToExpectedMs = record.completedAt - startedAt;
+      }
+    } else {
+      record.state = "PARTIAL";
+    }
+    await rememberReconciliation(record);
+    logStartupReconciliation(record);
+    return record;
+  } catch (error) {
+    record.state = "ERROR";
+    record.completedAt = Date.now();
+    await rememberReconciliation(record).catch(() => {});
+    logStartupReconciliation(record);
+    throw error;
+  }
 }
 
 // A tab the user opened or navigated onto a configured channel. Adopts that

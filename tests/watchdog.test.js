@@ -426,12 +426,16 @@ describe("watchdog schema 2", () => {
       now: 80_000,
       managed: { "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, recoveryAttempts: 0 } },
     });
-    assert.equal(playing.streams[0].successfulRecoveries, 1);
-    assert.equal(playing.ledger.events.filter((event) => event.type === "playback-recovered").length, 1);
+    assert.equal(playing.streams[0].successfulRecoveries, 0);
+    assert.equal(playing.ledger.events.filter((event) => event.type === "playback-recovered").length, 0);
     const again = foldWatchdogLedger(playing.ledger, {
       now: 110_000,
-      managed: { "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, lastAdvanceAt: 110_000 } },
+      managed: {
+        "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, lastAdvanceAt: 110_000, recoveryAttempts: 0 },
+      },
     });
+    assert.equal(again.streams[0].successfulRecoveries, 1);
+    assert.equal(again.streams[0].lastRecoveryResult, "ok");
     assert.equal(again.ledger.events.filter((event) => event.type === "playback-recovered").length, 1);
     assert.equal(again.streams[0].sessionPlaybackSeconds, 30);
     const acked = acknowledgeWatchdogEvents(
@@ -444,6 +448,54 @@ describe("watchdog schema 2", () => {
       managed: { "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, lastAdvanceAt: 140_000 } },
     });
     assert.equal(after.ledger.events.length, 0);
+  });
+
+  it("does not treat playback that resumed on its own as a recovery", () => {
+    const start = ledgerAt(1_000);
+    const stalled = foldWatchdogLedger(start, {
+      now: 2_000,
+      managed: { "3": { tabId: 3, login: "held", health: HEALTH.STALLED, healthReason: "video froze" } },
+    });
+    const playing = foldWatchdogLedger(stalled.ledger, {
+      now: 5_000,
+      managed: { "3": { tabId: 3, login: "held", health: HEALTH.MEDIA_PLAYING, lastAdvanceAt: 4_000 } },
+    });
+    assert.equal(playing.streams[0].successfulRecoveries, 0);
+    assert.equal(playing.streams[0].lastRecoveryResult, null);
+    assert.equal(playing.ledger.events.filter((event) => event.type === "playback-recovered").length, 0);
+    assert.equal(playing.ledger.events.some((event) => event.type === "playback-started"), true);
+  });
+
+  it("puts reconciliation on the heartbeat", () => {
+    const report = heartbeatReport({
+      version: "1.2.40",
+      at: 5_000,
+      managed: 4,
+      playing: 4,
+      stalled: 0,
+      reconciliation: {
+        state: "COMPLETE",
+        configured: 4,
+        managed: 4,
+        openTwitchTabs: 4,
+        matchingTabs: 4,
+        adopted: 2,
+        opened: 0,
+        skipped: 2,
+        startedAt: 1_000,
+        completedAt: 1_800,
+        timeToExpectedMs: 800,
+      },
+    });
+    assert.equal(report.configured, 4);
+    assert.equal(report.managed, 4);
+    assert.equal(report.reconciliationState, "COMPLETE");
+    assert.equal(report.reconciliationStartedAt, 1_000);
+    assert.equal(report.reconciliationCompletedAt, 1_800);
+    assert.equal(report.reconciliation.skipped, 2);
+    assert.equal(report.reconciliation.timeToExpectedMs, 800);
+    assert.equal(heartbeatReport({ at: 5_000 }).reconciliationState, null);
+    assert.equal(heartbeatReport({ at: 5_000 }).configured, null);
   });
 
   it("counts a confirmed claim separately from a balance change", () => {

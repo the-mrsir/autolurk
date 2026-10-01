@@ -59,6 +59,7 @@ import {
   handleNotificationClick,
   pollLiveState,
   reconcileStartupChannels,
+  reconcileStartupChannelsIfShort,
   refreshStreamForUser,
   snoozeStream,
   syncFollows,
@@ -301,6 +302,11 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         // where a restart finds out whether the grid tab is still there.
         await reconcileMultistream().catch((error) =>
           console.warn("Multistream reconcile failed", error)
+        );
+        // Another pass only after a shortfall has lasted two minutes. Offline
+        // channels are left alone; a channel that already has a tab is adopted.
+        await reconcileStartupChannelsIfShort().catch((error) =>
+          console.warn("Startup reconciliation failed", error)
         );
         await buildSnapshot();
         await tickWatchStreaks().catch((error) => console.warn("Streak check failed", error));

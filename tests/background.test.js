@@ -22,8 +22,14 @@ const {
   openManagedStream,
   reconcileManagedTabs,
 } = await import("../background/tab-manager.js");
-const { adoptNavigatedChannel, enforceSyncedFavoriteIntent, reconcileGroupedStreams, reconcileStartupChannels } =
-  await import("../background/stream-manager.js");
+const {
+  adoptNavigatedChannel,
+  enforceSyncedFavoriteIntent,
+  reconciliationNeedsAnotherPass,
+  reconcileGroupedStreams,
+  reconcileStartupChannels,
+  reconcileStartupChannelsIfShort,
+} = await import("../background/stream-manager.js");
 
 const NOW = () => Date.now();
 
@@ -803,7 +809,7 @@ describe("startup reconciliation", () => {
       });
   }
 
-  it("adopts open Twitch tabs and opens the configured channels that are missing", async () => {
+  it("adopts open Twitch tabs and leaves offline channels closed", async () => {
     const previous = {
       backgroundMs: BOOTSTRAP_TIMING.backgroundMs,
       pollMs: BOOTSTRAP_TIMING.pollMs,
@@ -823,6 +829,9 @@ describe("startup reconciliation", () => {
           c: favorite("c", "gamma"),
           d: favorite("d", "delta"),
         },
+        liveState: {
+          c: { userId: "c", login: "gamma", isLive: true, streamId: "gamma-live", stale: false },
+        },
         managedTabs: { "404": { tabId: 404, userId: "a", login: "alpha", expectedChannel: "alpha" } },
       },
     });
@@ -833,28 +842,49 @@ describe("startup reconciliation", () => {
       throw new Error("watchdog down");
     };
     try {
-      const { lines } = await captureInfo(() => reconcileStartupChannels());
+      const { result, lines } = await captureInfo(() => reconcileStartupChannels());
       const managed = await getManagedTabs();
       const logins = Object.values(managed).map((entry) => entry.login).sort();
-      assert.deepEqual(logins, ["alpha", "beta", "delta", "gamma"]);
+      assert.deepEqual(logins, ["alpha", "beta", "gamma"]);
       assert.equal(managed["11"]?.adopted, true);
       assert.equal(managed["12"]?.adopted, true);
       assert.equal(lines[0], "AutoLurk startup reconciliation");
       assert.equal(lines[1], "Configured channels: 4");
-      assert.equal(lines[2], "Existing matching tabs: 2");
-      assert.equal(lines[3], "Adopted: 2");
-      assert.equal(lines[4], "Opened: 2");
-      assert.equal(lines[5], "Managed after reconciliation: 4");
+      assert.equal(lines[2], "Open Twitch tabs: 2");
+      assert.equal(lines[3], "Existing matching tabs: 2");
+      assert.equal(lines[4], "Adopted: 2");
+      assert.equal(lines[5], "Opened: 1");
+      assert.equal(lines[6], "Skipped: 1");
+      assert.equal(lines[7], "Managed after reconciliation: 3");
+      assert.equal(result.state, "PARTIAL");
       assert.equal(fetched, 0);
       assert.equal(
-        [...mock.tabState.values()].filter((tab) => String(tab.url || "").includes("twitch.tv/alpha")).length,
-        1
+        [...mock.tabState.values()].filter((tab) => String(tab.url || "").includes("twitch.tv/delta")).length,
+        0
       );
+      const before = [...mock.tabState.keys()].length;
+      await reconcileStartupChannels();
+      assert.equal([...mock.tabState.keys()].length, before);
+      assert.equal(Object.keys(await getManagedTabs()).length, 3);
     } finally {
       globalThis.fetch = original;
       BOOTSTRAP_TIMING.backgroundMs = previous.backgroundMs;
       BOOTSTRAP_TIMING.pollMs = previous.pollMs;
     }
+  });
+
+  it("waits two minutes before reconciling a shortfall again", async () => {
+    const partial = {
+      state: "PARTIAL",
+      configured: 4,
+      managed: 2,
+      completedAt: 10_000,
+    };
+    assert.equal(reconciliationNeedsAnotherPass(partial, 10_000 + 60_000), false);
+    assert.equal(reconciliationNeedsAnotherPass(partial, 10_000 + 120_000), true);
+    assert.equal(reconciliationNeedsAnotherPass({ ...partial, state: "COMPLETE", managed: 4 }, 200_000), false);
+    mock.session.startupReconciliation = partial;
+    assert.equal(await reconcileStartupChannelsIfShort(70_000), null);
   });
 
   it("adopts a tab navigated to a configured channel", async () => {
@@ -888,8 +918,8 @@ describe("startup reconciliation", () => {
 
     const { lines } = await captureInfo(() => reconcileStartupChannels());
     assert.deepEqual(await getManagedTabs(), {});
-    assert.equal(lines[4], "Opened: 0");
-    assert.equal(lines[5], "Managed after reconciliation: 0");
+    assert.equal(lines[5], "Opened: 0");
+    assert.equal(lines[7], "Managed after reconciliation: 0");
     assert.equal(mock.tabState.has(11), true);
   });
 });

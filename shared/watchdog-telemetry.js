@@ -117,17 +117,31 @@ function blankTab(channel) {
     lastReason: "",
     lastFailureCategory: null,
     lastRecoveryResult: null,
+    pendingRecoveryAt: 0,
+    recoveryResolved: false,
     openingBalance: null,
     knownClaims: null,
     knownFailedClaims: null,
   };
 }
 
-function noteAttempts(tab, entry) {
+function noteAttempts(tab, entry, now) {
   const attempts = Number(entry?.recoveryAttempts);
-  if (!Number.isFinite(attempts) || attempts < 0) return;
-  if (attempts > tab.recoveryHigh) {
-    tab.recoveryAttempts += attempts - tab.recoveryHigh;
+  const stage = String(entry?.recoveryStage || "");
+  const recovering = entry?.health === "recovering" || stage !== "";
+  const markPending = () => {
+    tab.pendingRecoveryAt = Number(entry?.lastRecoveryAt) > 0 ? Number(entry.lastRecoveryAt) : now;
+    tab.recoveryResolved = false;
+  };
+  if (!Number.isFinite(attempts) || attempts < 0) {
+    if (recovering && !(Number(tab.pendingRecoveryAt) > 0)) markPending();
+    return;
+  }
+  if (attempts > (Number(tab.recoveryHigh) || 0)) {
+    tab.recoveryAttempts += attempts - (Number(tab.recoveryHigh) || 0);
+    markPending();
+  } else if (recovering && !(Number(tab.pendingRecoveryAt) > 0)) {
+    markPending();
   }
   tab.recoveryHigh = attempts;
 }
@@ -186,25 +200,33 @@ function updateTab(ledger, previous, entry, points, now) {
       now
     );
   }
+  noteAttempts(tab, entry, now);
+  const pending = Number(tab.pendingRecoveryAt) > 0 && tab.recoveryResolved !== true;
+  const advancedAt = Number(entry.lastAdvanceAt) || 0;
+
   if (state === "FAILED" && tab.lastState !== "FAILED") {
     tab.failedRecoveries += 1;
     tab.lastFailureCategory = failureCategory(reason);
     tab.lastRecoveryResult = "failed";
+    if (pending) tab.recoveryResolved = true;
     pushEvent(ledger, { type: "recovery-failed", channel: tab.channel, metadata: { reason } }, now);
   }
   if (state === "OFFLINE" && tab.lastState !== "OFFLINE") {
     tab.lastFailureCategory = "offline";
     pushEvent(ledger, { type: "channel-offline", channel: tab.channel, metadata: {} }, now);
   }
-  const recoveredFrom = new Set(["STALLED", "FAILED", "RECOVERING", "MISSING", "DEGRADED"]);
-  if (state === "PLAYING" && tab.lastState !== "PLAYING") {
-    if (recoveredFrom.has(tab.lastState)) {
-      tab.successfulRecoveries += 1;
-      tab.lastRecoveryResult = "ok";
-      pushEvent(ledger, { type: "playback-recovered", channel: tab.channel, metadata: {} }, now);
-    } else if (tab.lastState) {
-      pushEvent(ledger, { type: "playback-started", channel: tab.channel, metadata: {} }, now);
-    } else if (!previous) {
+  // A later PLAYING sample counts as a recovery only when frames advanced
+  // after the attempt. Playback that resumes on its own is not a success.
+  const attributable = pending && state === "PLAYING" && advancedAt >= tab.pendingRecoveryAt;
+  if (attributable) {
+    tab.successfulRecoveries += 1;
+    tab.lastRecoveryResult = "ok";
+    tab.recoveryResolved = true;
+    pushEvent(ledger, { type: "playback-recovered", channel: tab.channel, metadata: {} }, now);
+  } else if (state === "PLAYING" && tab.lastState !== "PLAYING") {
+    if (pending && advancedAt > 0 && advancedAt < tab.pendingRecoveryAt) {
+      tab.lastRecoveryResult = "unknown";
+    } else if (!pending && (tab.lastState || !previous)) {
       pushEvent(ledger, { type: "playback-started", channel: tab.channel, metadata: {} }, now);
     }
   }
@@ -239,7 +261,6 @@ function updateTab(ledger, previous, entry, points, now) {
     tab.knownFailedClaims = Number(record.unconfirmedClaims) || 0;
   }
 
-  noteAttempts(tab, entry);
   tab.lastSampleAt = now;
   tab.lastState = state || "";
   if (quality) tab.lastQuality = quality;
@@ -331,6 +352,40 @@ export function acknowledgeWatchdogEvents(ledger, ids) {
   };
 }
 
+export function reconciliationTelemetry(record) {
+  if (!record || typeof record !== "object") {
+    return {
+      configured: null,
+      reconciliationState: null,
+      reconciliationStartedAt: null,
+      reconciliationCompletedAt: null,
+      reconciliation: null,
+    };
+  }
+  const started = Number(record.startedAt) > 0 ? Number(record.startedAt) : null;
+  const completed = Number(record.completedAt) > 0 ? Number(record.completedAt) : null;
+  const timeToExpected = Number(record.timeToExpectedMs);
+  return {
+    configured: Number.isFinite(Number(record.configured)) ? Number(record.configured) : null,
+    reconciliationState: record.state || null,
+    reconciliationStartedAt: started,
+    reconciliationCompletedAt: completed,
+    reconciliation: {
+      state: record.state || null,
+      configured: Number.isFinite(Number(record.configured)) ? Number(record.configured) : null,
+      openTwitchTabs: Number(record.openTwitchTabs) || 0,
+      matchingTabs: Number(record.matchingTabs) || 0,
+      adopted: Number(record.adopted) || 0,
+      opened: Number(record.opened) || 0,
+      skipped: Number(record.skipped) || 0,
+      managed: Number.isFinite(Number(record.managed)) ? Number(record.managed) : null,
+      startedAt: started,
+      completedAt: completed,
+      timeToExpectedMs: Number.isFinite(timeToExpected) ? timeToExpected : null,
+    },
+  };
+}
+
 export function heartbeatReport({
   version = "",
   at = 0,
@@ -342,6 +397,7 @@ export function heartbeatReport({
   startedAt = 0,
   streams = [],
   events = [],
+  reconciliation = null,
 } = {}) {
   const instant = Number(at);
   let lastPlaybackAt = null;
@@ -356,6 +412,7 @@ export function heartbeatReport({
     startedAt: Number(startedAt) > 0 ? Number(startedAt) : 0,
     uptimeMs: Number(startedAt) > 0 && instant > startedAt ? Math.floor(instant - startedAt) : 0,
     lastPlaybackAt,
+    ...reconciliationTelemetry(reconciliation),
     streams,
     events,
   };

@@ -145,6 +145,7 @@ async function composeReport(config) {
   });
   await setSessionValue(SESSION_KEYS.WATCHDOG, folded.ledger);
   const counts = streamCounts(managed);
+  const reconciliation = await getSessionValue(SESSION_KEYS.RECONCILE, null);
   return {
     config: live,
     payload: heartbeatReport({
@@ -156,6 +157,7 @@ async function composeReport(config) {
       startedAt: folded.ledger.startedAt,
       streams: folded.streams,
       events: folded.ledger.events,
+      reconciliation,
     }),
   };
 }

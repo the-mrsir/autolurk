@@ -43,6 +43,8 @@ export const SESSION_KEYS = {
   STARTUP_POLLS: "startupPolls",
   // Local-monitor session. Dies with the browser. Absent while the monitor is off.
   WATCHDOG: "watchdogSession",
+  // Startup reconciliation. Session lifetime matches one browser run.
+  RECONCILE: "startupReconciliation",
 };
 
 export const STORAGE_KEYS = {
