@@ -260,6 +260,38 @@ describe("local monitor runtime", () => {
     }
   });
 
+  it("leaves managed streams in place when the monitor cannot be reached", async () => {
+    mock.reset({
+      storage: {
+        settings: { automationEnabled: true },
+        managedTabs: {
+          "3": { tabId: 3, health: HEALTH.MEDIA_PLAYING, login: "one" },
+          "4": { tabId: 4, health: HEALTH.MEDIA_PLAYING, login: "two" },
+        },
+      },
+    });
+    await mock.chrome.permissions.request({ origins: ["http://127.0.0.1/*"] });
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => {
+      throw new Error("unavailable");
+    };
+    try {
+      const { saveWatchdogSettings } = await import("../background/watchdog.js");
+      const { getManagedTabs } = await import("../shared/storage.js");
+      await saveWatchdogSettings({
+        enabled: true,
+        endpoint: "http://127.0.0.1:9/heartbeat",
+        token: "monitor-secret",
+        tokenSet: true,
+        intervalSeconds: 30,
+        recover: true,
+      });
+      assert.deepEqual(Object.keys(await getManagedTabs()).sort(), ["3", "4"]);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("refuses a remote address and does not request it", async () => {
     mock.reset({ storage: {} });
     let fetched = 0;

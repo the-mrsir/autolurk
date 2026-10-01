@@ -51,9 +51,10 @@ import { logActivity } from "./activity.js";
 import { recordFavoriteRemoval, schedulePush } from "./sync.js";
 import { prefetchSevenTv } from "./seventv.js";
 import { multistreamSnapshot } from "./multistream.js";
-import { clearBootWatch } from "./stream-boot.js";
+import { clearBootWatch, scheduleBootWatch } from "./stream-boot.js";
 import {
   adoptGroupedStreamTab,
+  announceManaged,
   closeGroupedStreamTab,
   closeManagedTab,
   consumeProgrammaticClose,
@@ -62,6 +63,7 @@ import {
   getManagedTabForUser,
   getAutoLurkGroupedTabs,
   openManagedStream,
+  pinQualityForTab,
   reconcileManagedTabs,
   updateLiveGroup,
   urlLeftExpectedChannel,
@@ -170,6 +172,188 @@ async function closeLocalTabsForChannel(userId, login) {
       await closeGroupedStreamTab(tab.tabId);
     }
   }
+}
+
+// One reconciliation at a time. A service-worker restart and an extension
+// reload can both ask during the same second, and both opening the missing
+// channels would duplicate them.
+let startupReconcileChain = Promise.resolve();
+
+function configuredLurkChannels(favorites, follows, liveState) {
+  const wanted = [];
+  const seen = new Set();
+  for (const [userId, favorite] of Object.entries(favorites || {})) {
+    if (favorite?.autoOpen === false || favorite?.snoozeUntilNextStream) continue;
+    const login = normalizeLogin(
+      follows[userId]?.login || favorite.login || liveState[userId]?.login
+    );
+    if (!login || seen.has(login)) continue;
+    seen.add(login);
+    wanted.push({
+      userId: String(userId),
+      login,
+      channel: resolveChannel(userId, follows, liveState[userId], favorite),
+      stream: liveState[userId] || {
+        userId: String(userId),
+        login,
+        streamId: "",
+        isLive: true,
+      },
+    });
+  }
+  return wanted;
+}
+
+function tabsForLogin(tabs, login) {
+  return tabs.filter((tab) => {
+    if (String(tab.url || "").includes("autolurk-grid")) return false;
+    return extractChannelFromUrl(tab.pendingUrl || tab.url) === login;
+  });
+}
+
+async function armManagedTab(tabId) {
+  await announceManaged(tabId);
+  await pinQualityForTab(tabId);
+  await scheduleBootWatch(tabId);
+}
+
+function logStartupReconciliation({ configured, matching, adopted, opened, managed }) {
+  console.info("AutoLurk startup reconciliation");
+  console.info(`Configured channels: ${configured}`);
+  console.info(`Existing matching tabs: ${matching}`);
+  console.info(`Adopted: ${adopted}`);
+  console.info(`Opened: ${opened}`);
+  console.info(`Managed after reconciliation: ${managed}`);
+}
+
+// Restores the managed registry from favorites and whatever Twitch tabs are
+// already open. A live poll and the local monitor are not required: a failed
+// heartbeat must not be what decides whether these channels exist.
+export function reconcileStartupChannels() {
+  const run = startupReconcileChain.then(runStartupReconciliation, runStartupReconciliation);
+  startupReconcileChain = run.then(
+    () => {},
+    () => {}
+  );
+  return run;
+}
+
+async function runStartupReconciliation() {
+  const [settings, favorites, follows, liveState, dismissed] = await Promise.all([
+    getSettings(),
+    getFavorites(),
+    getFollows(),
+    getLiveState(),
+    getDismissed(),
+  ]);
+  await reconcileManagedTabs();
+
+  const wanted = configuredLurkChannels(favorites, follows, liveState);
+  const automation = settings.automationEnabled === true && settings.autoOpenFavorites === true;
+  const tabs = await chrome.tabs.query({ url: "*://www.twitch.tv/*" });
+  let matching = 0;
+  let adopted = 0;
+  let opened = 0;
+
+  for (const item of wanted) {
+    const matches = tabsForLogin(tabs, item.login);
+    matching += matches.length;
+    if (!automation) continue;
+
+    const already =
+      (await getManagedTabForUser(item.userId)) || (await getManagedTabForLogin(item.login));
+    const keeper =
+      matches.find((tab) => already && Number(tab.id) === Number(already.tabId)) ||
+      matches.find((tab) => tab.active) ||
+      matches[0];
+
+    if (!already && keeper) {
+      const entry = await adoptGroupedStreamTab(keeper.id, item.channel, item.stream);
+      if (entry) adopted += 1;
+    }
+
+    for (const extra of matches) {
+      if (!keeper || Number(extra.id) === Number(keeper.id)) continue;
+      if (already && Number(extra.id) === Number(already.tabId)) continue;
+      try {
+        await chrome.tabs.remove(Number(extra.id));
+      } catch {
+        // Closed while we were matching it.
+      }
+    }
+  }
+
+  if (automation) {
+    const max = Number(settings.maxAutoOpenStreams) || 0;
+    for (const item of wanted) {
+      if ((await getManagedTabForUser(item.userId)) || (await getManagedTabForLogin(item.login))) {
+        continue;
+      }
+      const dismissedId = dismissed[item.userId];
+      if (
+        !settings.reopenIfManuallyClosed &&
+        dismissedId &&
+        item.stream.streamId &&
+        dismissedId === item.stream.streamId
+      ) {
+        continue;
+      }
+      const openCount = Object.keys(await getManagedTabs()).length;
+      if (max > 0 && openCount >= max) continue;
+      try {
+        const entry = await openManagedStream(item.channel, item.stream, {
+          focus: opensInFront(settings, true),
+        });
+        if (entry) opened += 1;
+      } catch (error) {
+        console.warn("Startup open failed", error);
+      }
+    }
+  }
+
+  const managed = await getManagedTabs();
+  if (automation) {
+    for (const entry of Object.values(managed)) {
+      await armManagedTab(entry.tabId);
+    }
+  }
+
+  const summary = {
+    configured: wanted.length,
+    matching,
+    adopted,
+    opened,
+    managed: Object.keys(managed).length,
+  };
+  logStartupReconciliation(summary);
+  return summary;
+}
+
+// A tab the user opened or navigated onto a configured channel. Adopts that
+// tab. It does not open anything else, and it does not ask the local monitor.
+export async function adoptNavigatedChannel(tabId, url) {
+  const login = extractChannelFromUrl(url);
+  if (!login) return null;
+  const settings = await getSettings();
+  if (!settings.automationEnabled || !settings.autoOpenFavorites) return null;
+
+  const managed = await getManagedTabs();
+  if (managed[String(tabId)]) return null;
+  if (await getManagedTabForLogin(login)) return null;
+
+  const [favorites, follows, liveState] = await Promise.all([
+    getFavorites(),
+    getFollows(),
+    getLiveState(),
+  ]);
+  const match = configuredLurkChannels(favorites, follows, liveState).find(
+    (item) => item.login === login
+  );
+  if (!match) return null;
+
+  const entry = await adoptGroupedStreamTab(tabId, match.channel, match.stream);
+  if (entry) await armManagedTab(entry.tabId);
+  return entry;
 }
 
 export async function enforceSyncedFavoriteIntent() {

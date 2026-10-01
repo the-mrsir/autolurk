@@ -50,6 +50,7 @@ import { noteStreakTabClosed, scanWatchStreaks, stopWatchStreaks, tickWatchStrea
 import { checkForUpdate } from "./updates.js";
 import {
   addChannelByLogin,
+  adoptNavigatedChannel,
   buildSnapshot,
   enforceSyncedFavoriteIntent,
   handleChannelChanged,
@@ -57,6 +58,7 @@ import {
   handleManualTabClose,
   handleNotificationClick,
   pollLiveState,
+  reconcileStartupChannels,
   refreshStreamForUser,
   snoozeStream,
   syncFollows,
@@ -157,6 +159,13 @@ async function runInitialize(options) {
   await parkWatchdog().catch((error) => console.warn("Local monitor schedule failed", error));
   await reconcileMultistream().catch((error) => console.warn("Multistream reconcile failed", error));
   await reconcileManagedTabs();
+  // Favorites and tabs that Brave already restored. This does not wait on
+  // Twitch or the local monitor. A heartbeat that fails afterwards cannot
+  // undo the registry this just rebuilt.
+  await reconcileStartupChannels().catch((error) =>
+    console.warn("Startup reconciliation failed", error)
+  );
+  await runWatchdogHeartbeat().catch((error) => console.warn("Local monitor failed", error));
   await buildSnapshot();
   await updateBadge();
   // Start the sleep-detection clock here, or the first health check after a
@@ -307,6 +316,8 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await buildSnapshot();
         return;
       case ALARMS.WATCHDOG:
+        // A report that races startup would still say managed: 0.
+        await startupReady;
         await runWatchdogHeartbeat().catch((error) => console.warn("Local monitor failed", error));
         return;
       case ALARMS.SYNC_FOLLOWS:
@@ -741,7 +752,11 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
     }
 
     if (changeInfo.url || tab?.url) {
-      await handleManagedNavigation(tabId, changeInfo.url || tab.url);
+      const url = changeInfo.url || tab.url;
+      await handleManagedNavigation(tabId, url);
+      if (changeInfo.url || changeInfo.status === "complete") {
+        await adoptNavigatedChannel(tabId, url);
+      }
     }
   } catch (error) {
     console.warn("Tab update handler failed", error);
@@ -892,7 +907,15 @@ parkWatchdog().catch((error) => {
 const startupReady = ensureBrowserStartup();
 
 async function ensureBrowserStartup() {
-  if (await getSessionValue(SESSION_KEYS.BOOTED, false)) return;
+  if (await getSessionValue(SESSION_KEYS.BOOTED, false)) {
+    // The browser session is already up. The worker itself was discarded, so
+    // the open Twitch tabs have to be claimed again before the next report.
+    await reconcileStartupChannels().catch((error) =>
+      console.warn("Startup reconciliation failed", error)
+    );
+    await runWatchdogHeartbeat().catch((error) => console.warn("Local monitor failed", error));
+    return;
+  }
   await setSessionValue(SESSION_KEYS.BOOTED, true);
   await initialize({ reset: true, startup: true }).catch((error) =>
     console.warn("Startup init failed", error)

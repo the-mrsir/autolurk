@@ -15,15 +15,15 @@ const {
   resetHealth,
 } = await import("../background/stream-boot.js");
 const {
+  BOOTSTRAP_TIMING,
   closeManagedTab,
   consumeProgrammaticClose,
   markProgrammaticClose,
   openManagedStream,
   reconcileManagedTabs,
 } = await import("../background/tab-manager.js");
-const { enforceSyncedFavoriteIntent, reconcileGroupedStreams } = await import(
-  "../background/stream-manager.js"
-);
+const { adoptNavigatedChannel, enforceSyncedFavoriteIntent, reconcileGroupedStreams, reconcileStartupChannels } =
+  await import("../background/stream-manager.js");
 
 const NOW = () => Date.now();
 
@@ -784,5 +784,112 @@ describe("tabs synced inside AutoLurk groups", () => {
 
     assert.notOk(mock.tabState.has(1));
     assert.deepEqual(await getManagedTabs(), {});
+  });
+});
+
+describe("startup reconciliation", () => {
+  function favorite(userId, login) {
+    return { userId, login, displayName: login, autoOpen: true };
+  }
+
+  function captureInfo(run) {
+    const lines = [];
+    const original = console.info;
+    console.info = (line) => lines.push(String(line));
+    return run()
+      .then((result) => ({ result, lines }))
+      .finally(() => {
+        console.info = original;
+      });
+  }
+
+  it("adopts open Twitch tabs and opens the configured channels that are missing", async () => {
+    const previous = {
+      backgroundMs: BOOTSTRAP_TIMING.backgroundMs,
+      pollMs: BOOTSTRAP_TIMING.pollMs,
+    };
+    BOOTSTRAP_TIMING.backgroundMs = 30;
+    BOOTSTRAP_TIMING.pollMs = 5;
+    mock.reset({
+      tabs: [
+        { id: 11, url: "https://www.twitch.tv/alpha", active: false },
+        { id: 12, url: "https://www.twitch.tv/beta", active: false },
+      ],
+      storage: {
+        settings: { automationEnabled: true, autoOpenFavorites: true, groupTabs: false, muteTabs: true },
+        favorites: {
+          a: favorite("a", "alpha"),
+          b: favorite("b", "beta"),
+          c: favorite("c", "gamma"),
+          d: favorite("d", "delta"),
+        },
+        managedTabs: { "404": { tabId: 404, userId: "a", login: "alpha", expectedChannel: "alpha" } },
+      },
+    });
+    let fetched = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = async () => {
+      fetched += 1;
+      throw new Error("watchdog down");
+    };
+    try {
+      const { lines } = await captureInfo(() => reconcileStartupChannels());
+      const managed = await getManagedTabs();
+      const logins = Object.values(managed).map((entry) => entry.login).sort();
+      assert.deepEqual(logins, ["alpha", "beta", "delta", "gamma"]);
+      assert.equal(managed["11"]?.adopted, true);
+      assert.equal(managed["12"]?.adopted, true);
+      assert.equal(lines[0], "AutoLurk startup reconciliation");
+      assert.equal(lines[1], "Configured channels: 4");
+      assert.equal(lines[2], "Existing matching tabs: 2");
+      assert.equal(lines[3], "Adopted: 2");
+      assert.equal(lines[4], "Opened: 2");
+      assert.equal(lines[5], "Managed after reconciliation: 4");
+      assert.equal(fetched, 0);
+      assert.equal(
+        [...mock.tabState.values()].filter((tab) => String(tab.url || "").includes("twitch.tv/alpha")).length,
+        1
+      );
+    } finally {
+      globalThis.fetch = original;
+      BOOTSTRAP_TIMING.backgroundMs = previous.backgroundMs;
+      BOOTSTRAP_TIMING.pollMs = previous.pollMs;
+    }
+  });
+
+  it("adopts a tab navigated to a configured channel", async () => {
+    mock.reset({
+      tabs: [{ id: 8, url: "https://www.twitch.tv/alpha", active: true }],
+      storage: {
+        settings: { automationEnabled: true, autoOpenFavorites: true, groupTabs: false },
+        favorites: { a: favorite("a", "alpha") },
+        managedTabs: {},
+      },
+    });
+
+    const entry = await adoptNavigatedChannel(8, "https://www.twitch.tv/alpha");
+    assert.equal(entry.tabId, 8);
+    assert.equal(Object.keys(await getManagedTabs()).length, 1);
+
+    const again = await adoptNavigatedChannel(8, "https://www.twitch.tv/alpha");
+    assert.equal(again, null);
+    assert.equal(Object.keys(await getManagedTabs()).length, 1);
+  });
+
+  it("does not open channels while automation is off", async () => {
+    mock.reset({
+      tabs: [{ id: 11, url: "https://www.twitch.tv/alpha", active: false }],
+      storage: {
+        settings: { automationEnabled: false, autoOpenFavorites: true, groupTabs: false },
+        favorites: { a: favorite("a", "alpha"), b: favorite("b", "beta") },
+        managedTabs: {},
+      },
+    });
+
+    const { lines } = await captureInfo(() => reconcileStartupChannels());
+    assert.deepEqual(await getManagedTabs(), {});
+    assert.equal(lines[4], "Opened: 0");
+    assert.equal(lines[5], "Managed after reconciliation: 0");
+    assert.equal(mock.tabState.has(11), true);
   });
 });
