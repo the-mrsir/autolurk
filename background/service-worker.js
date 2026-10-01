@@ -94,6 +94,7 @@ import {
 import { handleHealthTick, runWakeRecovery, WAKE_GAP_MS } from "./wake.js";
 import { parkWatchdog, readWatchdogSettings, runWatchdogHeartbeat, saveWatchdogSettings } from "./watchdog.js";
 import {
+  consumeExtensionMute,
   handleBootWatchAlarm,
   handlePlayerBoot,
   handlePlayerHealth,
@@ -734,10 +735,13 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   try {
     if (changeInfo.mutedInfo) {
       const muted = Boolean(changeInfo.mutedInfo.muted);
+      const fromUs = consumeExtensionMute(tabId);
       const managed = await updateManagedTab(tabId, (entry) => {
         const next = { ...entry, muted };
-        // Once the user sets the tab mute themselves, stop reapplying ours.
-        if (changeInfo.mutedInfo.reason === "user") next.userUnmuted = !muted;
+        // A mute this worker just applied is not the user changing their mind.
+        if (fromUs) return next;
+        if (!muted) next.userUnmuted = true;
+        else if (changeInfo.mutedInfo.reason === "user") next.userUnmuted = false;
         return next;
       });
       const entry = managed[String(tabId)];

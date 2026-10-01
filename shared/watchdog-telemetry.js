@@ -237,7 +237,9 @@ function updateTab(ledger, previous, entry, points, now) {
       now
     );
   }
-  if (previous && /reload/i.test(reason) && !/reload/i.test(tab.lastReason)) {
+  const reloadNoted = /reload/i.test(reason) && !/suppress/i.test(reason);
+  const reloadNotedBefore = /reload/i.test(tab.lastReason) && !/suppress/i.test(tab.lastReason);
+  if (previous && reloadNoted && !reloadNotedBefore) {
     tab.reloadCount += 1;
     pushEvent(ledger, { type: "tab-reloaded", channel: tab.channel, metadata: {} }, now);
   }

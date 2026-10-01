@@ -53,10 +53,27 @@ export function parseBootWatchAlarm(name) {
   return Number.isFinite(tabId) ? tabId : null;
 }
 
+// Tabs this worker just muted. The change event must not be treated as the
+// user choosing mute, or their unmute is forgotten and the next pass mutes
+// the stream they are watching.
+const extensionMuteTabs = new Set();
+
+export function expectExtensionMute(tabId) {
+  extensionMuteTabs.add(Number(tabId));
+}
+
+export function consumeExtensionMute(tabId) {
+  const id = Number(tabId);
+  const hit = extensionMuteTabs.has(id);
+  if (hit) extensionMuteTabs.delete(id);
+  return hit;
+}
+
 // Reloads and Twitch's own navigation drop the tab-level mute, so it is
-// reapplied — but never against an explicit choice by the user. The stored
-// entry is re-read here because callers often hold a snapshot taken before the
-// user touched the speaker icon.
+// reapplied — but never against an explicit choice by the user, and never
+// against the tab that is currently in front. The stored entry is re-read
+// here because callers often hold a snapshot taken before the user touched
+// the speaker icon.
 export async function ensureTabMuted(tabId) {
   const settings = await getSettings();
   if (!settings.muteTabs) return false;
@@ -67,10 +84,12 @@ export async function ensureTabMuted(tabId) {
 
   try {
     const tab = await chrome.tabs.get(Number(tabId));
-    if (tab.mutedInfo?.muted) return false;
+    if (tab.mutedInfo?.muted || tab.active) return false;
+    expectExtensionMute(tabId);
     await chrome.tabs.update(Number(tabId), { muted: true });
     return true;
   } catch {
+    extensionMuteTabs.delete(Number(tabId));
     return false;
   }
 }
@@ -582,6 +601,16 @@ export async function runRecovery(tabId, entry, reason, options = {}) {
     !options.allowNavigation &&
     (stage === RECOVERY_STAGE.RELOAD || stage === RECOVERY_STAGE.REOPEN)
   ) {
+    // Server rotation is what brings a stream forward and reloads it. Failing
+    // the stream here discards the tab before that check can run.
+    if ((await getSettings()).serverRotation) {
+      const waiting = await updateManagedTab(tabId, {
+        health: HEALTH.STALLED,
+        healthReason: reason,
+        recoveryStage: "",
+      });
+      return waiting[String(tabId)] || entry;
+    }
     return markFailed(
       tabId,
       entry,

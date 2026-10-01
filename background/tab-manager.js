@@ -20,6 +20,7 @@ import { logActivity } from "./activity.js";
 import {
   clearBootWatch,
   ensureTabMuted,
+  expectExtensionMute,
   handlePlayerHealth,
   parseBootWatchAlarm,
   scheduleBootWatch,
@@ -1308,9 +1309,10 @@ export async function muteAutoLurkTabs() {
       continue;
     }
     for (const tab of tabs) {
-      if (tab.mutedInfo?.muted) continue;
+      if (tab.mutedInfo?.muted || tab.active) continue;
       if (managed[String(tab.id)]?.userUnmuted) continue;
       try {
+        expectExtensionMute(tab.id);
         await chrome.tabs.update(tab.id, { muted: true });
       } catch {
         // Tab closed while the group was being joined.

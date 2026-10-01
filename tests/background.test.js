@@ -492,6 +492,38 @@ describe("health check", () => {
     await runHealthCheck();
     assert.equal(mock.tabState.get(1).mutedInfo.muted, false);
   });
+
+  it("does not mute the stream that is in front", async () => {
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: true, mutedInfo: { muted: false } }],
+      storage: { managedTabs: { "1": managed(1) }, settings: { muteTabs: true } },
+    });
+    mock.setContentScript(1, () => ({ playing: true, currentTime: 300, muted: false, channel: "streamer" }));
+
+    await runHealthCheck();
+    assert.equal(mock.tabState.get(1).mutedInfo.muted, false);
+  });
+
+  it("leaves a reload for server rotation instead of failing the stream", async () => {
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: false }],
+      storage: {
+        settings: { serverRotation: true },
+        managedTabs: {
+          "1": managed(1, {
+            health: HEALTH.STALLED,
+            recoveryAttempts: 1,
+            lastRecoveryAt: 0,
+          }),
+        },
+      },
+    });
+
+    await handleBootWatchAlarm(1);
+    const entry = (await getManagedTabs())["1"];
+    assert.equal(entry.health, HEALTH.STALLED);
+    assert.equal(String(entry.healthReason || "").includes("suppressed"), false);
+  });
 });
 
 describe("duplicate open protection", () => {
