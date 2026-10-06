@@ -418,6 +418,64 @@ describe("one AutoLurk group, ever", () => {
     assert.equal(mock.tabState.get(2).mutedInfo?.muted, true, "a pulled stream stayed unmuted");
   });
 
+  it("keeps the server's group in front when a second AutoLurk group is opened", async () => {
+    mock.reset({
+      tabs: [
+        {
+          id: 1,
+          windowId: 1,
+          url: "https://www.twitch.tv/zerggyyyy",
+          active: true,
+        },
+        { id: 2, windowId: 2, url: "https://www.twitch.tv/zerggyyyy", active: true },
+        { id: 3, windowId: 2, url: "https://www.twitch.tv/goober", active: false },
+      ],
+      storage: {
+        settings: { muteTabs: true, groupTabs: true, collapseGroup: true, serverRotation: true },
+        managedTabs: {
+          "1": {
+            tabId: 1,
+            userId: "1",
+            login: "zerggyyyy",
+            expectedChannel: "zerggyyyy",
+            health: "media_playing",
+          },
+        },
+      },
+    });
+    mock.focusWindow(1);
+    const localGroup = await mock.chrome.tabs.group({
+      tabIds: [1],
+      createProperties: { windowId: 1 },
+    });
+    await mock.chrome.tabGroups.update(localGroup, { title: "AutoLurk · 1", collapsed: false });
+    const syncedGroup = await mock.chrome.tabs.group({
+      tabIds: [2, 3],
+      createProperties: { windowId: 2 },
+    });
+    await mock.chrome.tabGroups.update(syncedGroup, {
+      title: "AutoLurk · 2",
+      collapsed: true,
+    });
+    mock.local.meta = { groupId: localGroup };
+
+    await consolidate();
+
+    const groups = [...mock.groupState.values()].filter((group) =>
+      String(group.title || "").startsWith("AutoLurk")
+    );
+    assert.equal(groups.length, 1, "the opened group was left beside the server's group");
+    assert.equal(groups[0].id, localGroup, "the server's streams were moved onto the new group");
+    assert.equal(groups[0].windowId, 1);
+    assert.equal(groups[0].collapsed, false, "the merge collapsed the group the server is showing");
+    assert.equal(mock.tabState.has(1), true, "the stream the server was watching was closed");
+    assert.equal(mock.tabState.has(2), false, "the opened copy of the same channel stayed open");
+    assert.equal(mock.tabState.get(1).active, true);
+    assert.equal(mock.tabState.get(1).windowId, 1);
+    assert.equal(mock.tabState.get(3).windowId, 1);
+    assert.equal(mock.tabState.get(3).groupId, localGroup);
+  });
+
   it("keeps one tab per channel when both computers opened the same streams", async () => {
     const channels = ["eslcs", "esfandtv", "northernlion", "otk"];
     const tabs = [];

@@ -140,21 +140,26 @@ async function closeDuplicateStreamTabs(tabs) {
     byLogin.set(login, matches);
   }
 
+  const protectManaged = (await getSettings()).serverRotation === true;
   let removed = 0;
   for (const [login, matches] of byLogin) {
     if (matches.length < 2) continue;
 
     // Keep the tab the user is looking at. Otherwise prefer one with managed
-    // playback evidence, then the oldest id (normally the original).
+    // playback evidence, then the oldest id (normally the original). On a
+    // server, the managed stream stays: opening the synced copy must not
+    // close the tab the rotation is checking.
     matches.sort((a, b) => {
       const aEntry = managed[String(a.id)];
       const bEntry = managed[String(b.id)];
       const aScore =
+        (protectManaged && aEntry ? 1000 : 0) +
         (aEntry?.health === "media_playing" ? 200 : 0) +
         (a.active ? 100 : 0) +
         (aEntry ? 20 : 0) +
         (Number(aEntry?.lastVerifiedAt) > 0 ? 10 : 0);
       const bScore =
+        (protectManaged && bEntry ? 1000 : 0) +
         (bEntry?.health === "media_playing" ? 200 : 0) +
         (b.active ? 100 : 0) +
         (bEntry ? 20 : 0) +
@@ -1567,9 +1572,22 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
   if (!settings.groupTabs) return;
 
-  const home =
-    discovered.canonical?.windowId ?? (await chooseHomeWindow(tabs, stored));
+  // A server is already showing one window. A second AutoLurk group — usually
+  // the other computer's, which Chrome only materializes once it is opened —
+  // has to fold into that window. Moving the live streams onto the new group
+  // hides them, and the rotation then has nothing it can see.
+  let home = discovered.canonical?.windowId ?? (await chooseHomeWindow(tabs, stored));
+  const showing = tabs.find((tab) => tab.active);
+  if (settings.serverRotation && showing?.windowId != null) {
+    home = showing.windowId;
+  } else if (settings.serverRotation) {
+    const storedGroup = await groupInfo(stored);
+    if (storedGroup && tabs.some((tab) => tab.windowId === storedGroup.windowId)) {
+      home = storedGroup.windowId;
+    }
+  }
   if (home == null) return;
+  const keepInFront = settings.serverRotation && showing ? Number(showing.id) : null;
 
   // One window first, then one group. Grouping before the moves would only
   // create a group in a window the tabs are about to leave.
@@ -1583,14 +1601,27 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     return;
   }
 
-  let groupId =
-    discovered.canonical?.id ?? (await resolveHomeGroup(home, tabs, stored));
+  let groupId = settings.serverRotation
+    ? await resolveHomeGroup(home, tabs, stored)
+    : discovered.canonical?.id ?? (await resolveHomeGroup(home, tabs, stored));
 
   // Reclaim the tabs of every other group of ours before folding them in, so
   // an existing split collapses instead of persisting.
   const strays = await ourOtherGroupIds(groupId, tabs);
   for (const group of discovered.groups) {
     if (group.id !== groupId) strays.add(group.id);
+  }
+  // A collapsed group Chrome just synced does not give up its tabs until it
+  // is open. Open it in place, then pull the tabs across, without sending the
+  // window the server is using to the back.
+  if (settings.serverRotation) {
+    for (const strayId of strays) {
+      try {
+        await chrome.tabGroups.update(strayId, { collapsed: false });
+      } catch {
+        // The group can vanish as its last tab leaves.
+      }
+    }
   }
   const reclaimed = await tabsInGroups(strays);
   await moveIntoWindow(reclaimed, home);
@@ -1618,12 +1649,31 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
   if (groupId == null) {
     // Never interpret an API failure as "there are no groups." That fail-open
-    // behavior was able to create one AutoLurk group per computer.
+    // behavior was able to create one AutoLurk group per computer. Look again
+    // before creating: a group can appear while the tabs were moving.
     if (!discovered.enumerationSucceeded) return;
-    try {
-      groupId = await chrome.tabs.group({ tabIds: wanted, createProperties: { windowId: home } });
-    } catch {
-      return;
+    const again = await discoverAutoLurkGroups(await ourManagedTabs(managedTabs), stored);
+    if (!again.enumerationSucceeded) return;
+    const existing = settings.serverRotation
+      ? again.groups.find((group) => group.windowId === home) || null
+      : again.canonical;
+    if (existing) {
+      groupId = existing.id;
+      try {
+        await chrome.tabs.group({ groupId, tabIds: wanted });
+      } catch {
+        if (await groupInfo(groupId)) {
+          await remember(groupId);
+          return;
+        }
+        return;
+      }
+    } else {
+      try {
+        groupId = await chrome.tabs.group({ tabIds: wanted, createProperties: { windowId: home } });
+      } catch {
+        return;
+      }
     }
   }
 
@@ -1643,7 +1693,9 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     });
     // Only collapse when a tab was just added in the background, otherwise the
     // periodic refresh keeps folding a group the user expanded.
-    if (settings.collapseGroup && options.collapseNow === true) {
+    if (settings.serverRotation) {
+      await chrome.tabGroups.update(groupId, { collapsed: false });
+    } else if (settings.collapseGroup && options.collapseNow === true) {
       const active = await chrome.tabs.query({ groupId, active: true });
       if (active.length === 0) await chrome.tabGroups.update(groupId, { collapsed: true });
     }
@@ -1670,6 +1722,32 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
 
   await remember(groupId);
   await muteAutoLurkTabs();
+
+  // Moving tabs clears the one that was in front. Put it back so the server
+  // check is still looking at a visible stream in the same window.
+  if (keepInFront != null) {
+    try {
+      const tab = await chrome.tabs.get(keepInFront);
+      await chrome.tabs.update(keepInFront, { active: true, autoDiscardable: false });
+      if (tab.windowId != null) {
+        const update = { focused: true };
+        try {
+          const win = await chrome.windows.get(tab.windowId);
+          if (win?.state === "minimized") update.state = "normal";
+        } catch {
+          // The window is still there enough to focus.
+        }
+        await chrome.windows.update(tab.windowId, update);
+      }
+      try {
+        await chrome.tabGroups.update(tab.groupId, { collapsed: false });
+      } catch {
+        // Already expanded with the group update above.
+      }
+    } catch {
+      // The stream closed during the merge.
+    }
+  }
 }
 
 // Consolidation used to run only when a stream opened, closed or reached
