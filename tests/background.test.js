@@ -529,7 +529,7 @@ describe("health check", () => {
     mock.reset({
       tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: false, windowId: 1 }],
       storage: {
-        settings: { openInFront: "all" },
+        settings: { serverRotation: true },
         managedTabs: {
           "1": managed(1, {
             openedAt: NOW() - HEALTH_TIMING.bootGraceMs - 1000,

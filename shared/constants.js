@@ -207,12 +207,11 @@ export function opensInFront(settings, favorite) {
   return false;
 }
 
-// Server rotation and "open streams in front" both mean a stalled stream may
-// be shown and reloaded. Leaving it failed does not bring it back.
+// Only server rotation lets recovery show a stalled stream and reload it.
+// "Open streams in front" is about new streams, and a stalled one pulled over
+// the stream someone is watching is exactly what it must not do.
 export function pullsStreamsForward(settings) {
-  if (settings?.serverRotation === true) return true;
-  const mode = settings?.openInFront || "off";
-  return mode === "favorites" || mode === "all";
+  return settings?.serverRotation === true;
 }
 
 // Twitch's own quality ids. 160p is the lightest decode; Source is whatever the

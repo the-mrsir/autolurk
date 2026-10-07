@@ -370,9 +370,9 @@ async function runStartupReconciliation() {
           continue;
         }
         try {
-          const entry = await openManagedStream(item.channel, item.stream, {
-            focus: opensInFront(settings, true),
-          });
+          // A repair pass. It fills in a missing stream behind whatever is
+          // on screen and never takes the screen itself.
+          const entry = await openManagedStream(item.channel, item.stream, { focus: false });
           if (entry) record.opened += 1;
           else record.skipped += 1;
         } catch (error) {
@@ -977,6 +977,7 @@ async function handleAutoOpens(favorites, follows, nextLive, dismissed, settings
     try {
       const entry = await openManagedStream(candidate.channel, candidate.stream, {
         focus: opensInFront(settings, true),
+        automatic: true,
       });
       if (entry) {
         openCount += 1;

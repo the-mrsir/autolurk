@@ -230,6 +230,7 @@ describe("merging preferences between computers", () => {
       backgroundQuality: "360p30",
       watchingQuality: "480p30",
       serverRotation: true,
+      openInFront: "all",
       watchdogToken: "local-secret",
       muteTabs: false,
     });

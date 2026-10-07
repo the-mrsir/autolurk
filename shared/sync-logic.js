@@ -55,6 +55,7 @@ export const UNSYNCED_SETTINGS = new Set([
   "backgroundQuality",
   "watchingQuality",
   "serverRotation",
+  "openInFront",
   "watchdogEnabled",
   "watchdogEndpoint",
   "watchdogToken",

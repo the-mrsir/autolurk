@@ -670,6 +670,47 @@ describe("one AutoLurk group, ever", () => {
     assert.equal(groupsHoldingManagedTabs(mock).size, 1);
   });
 
+  it("opens an automatic stream behind the Twitch stream being watched", async () => {
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/watching", active: true }],
+      storage: base.storage,
+    });
+    const restore = playingTab(mock);
+    let opened;
+    try {
+      opened = await openManagedStream(
+        { userId: "2", login: "two", displayName: "Two" },
+        {},
+        { focus: true, automatic: true }
+      );
+    } finally {
+      restore();
+    }
+
+    assert.equal(mock.tabState.get(1).active, true, "the stream being watched lost the screen");
+    assert.equal(mock.tabState.get(opened.tabId).active, false);
+  });
+
+  it("still brings a stream forward when the user asked for it", async () => {
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/watching", active: true }],
+      storage: base.storage,
+    });
+    const restore = playingTab(mock);
+    let opened;
+    try {
+      opened = await openManagedStream(
+        { userId: "2", login: "two", displayName: "Two" },
+        {},
+        { focus: true }
+      );
+    } finally {
+      restore();
+    }
+
+    assert.equal(mock.tabState.get(opened.tabId).active, true);
+  });
+
   it("asks a focused open for viewing quality, not 160p", async () => {
     mock.reset(base);
     const restore = playingTab(mock);

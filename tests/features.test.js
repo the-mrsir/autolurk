@@ -266,11 +266,11 @@ describe("opening streams in front", () => {
     assert.equal(opensInFront({ openInFront: "all" }, false), true);
   });
 
-  it("treats rotation and open-in-front as permission to recover on screen", () => {
+  it("lets only server rotation recover a stream on screen", () => {
     assert.equal(pullsStreamsForward({}), false);
     assert.equal(pullsStreamsForward({ openInFront: "off" }), false);
-    assert.equal(pullsStreamsForward({ openInFront: "favorites" }), true);
-    assert.equal(pullsStreamsForward({ openInFront: "all" }), true);
+    assert.equal(pullsStreamsForward({ openInFront: "favorites" }), false);
+    assert.equal(pullsStreamsForward({ openInFront: "all" }), false);
     assert.equal(pullsStreamsForward({ serverRotation: true }), true);
   });
 });

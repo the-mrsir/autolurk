@@ -556,6 +556,7 @@ async function reopenStream(tabId, entry) {
       { streamId: entry.streamId },
       {
         focus: opensInFront(settings, Boolean(favorites[entry.userId])),
+        automatic: true,
         carry: { reopenCount: (entry.reopenCount || 0) + 1 },
       }
     );

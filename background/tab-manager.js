@@ -705,9 +705,27 @@ async function showAndRestart(tabId, options = {}) {
   }
 }
 
+// The tab in front of the most recent window is a Twitch page. Brave can
+// report its window as unfocused while it is on screen, so the focus flag is
+// not required.
+async function watchingTwitch() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    return /^https:\/\/(www\.)?twitch\.tv\//.test(String(tab?.url || ""));
+  } catch {
+    return false;
+  }
+}
+
 async function createManagedStream(channel, stream, options = {}) {
   const login = normalizeLogin(channel.login);
   if (!login) throw new Error("That channel is missing a Twitch username.");
+
+  // A stream that went live while someone is watching Twitch opens behind
+  // what they are watching, whatever "Open streams in front" says.
+  if (options.focus && options.automatic && (await watchingTwitch())) {
+    options = { ...options, focus: false };
+  }
 
   const settings = await getSettings();
   return withBootstrapLock(async () => {
