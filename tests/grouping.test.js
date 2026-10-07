@@ -930,6 +930,33 @@ describe("one AutoLurk group across computers", () => {
     assert.equal(allAutoLurkGroups().length, 1, "the joined group was taken apart");
   });
 
+  it("keeps the shared group's copy of a channel and closes the loose one", async () => {
+    mock.reset(base);
+    mock.seedSync({ groupClaim: { machine: "other-computer", at: Date.now() } });
+    await openTwo();
+    const [loose] = managedTabIds(mock);
+    const login = new URL(mock.tabState.get(loose).url).pathname.split("/")[1];
+
+    mock.tabState.set(60, {
+      id: 60,
+      windowId: 1,
+      url: `https://www.twitch.tv/${login}`,
+      groupId: -1,
+      status: "complete",
+      mutedInfo: { muted: false },
+    });
+    const synced = await mock.chrome.tabs.group({ tabIds: [60], createProperties: { windowId: 1 } });
+    await mock.chrome.tabGroups.update(synced, { title: "AutoLurk · 1" });
+
+    const { consolidateIfSplit } = await import("../background/tab-manager.js");
+    await consolidateIfSplit();
+
+    assert.equal(mock.tabState.has(60), true, "a tab in the shared group was closed");
+    assert.equal(mock.tabState.has(loose), false, "the loose copy stayed open");
+    const { getManagedTabs } = await import("../shared/storage.js");
+    assert.ok((await getManagedTabs())["60"], "the shared group's tab was not taken over");
+  });
+
   it("claims the group it made so the other computer does not make one", async () => {
     mock.reset(base);
     await openTwo();

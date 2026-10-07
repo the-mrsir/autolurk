@@ -61,7 +61,6 @@ import {
   closeManagedTab,
   consumeProgrammaticClose,
   focusOrOpen,
-  foreignGroupTabIds,
   getManagedTabForLogin,
   getManagedTabForUser,
   getAutoLurkGroupedTabs,
@@ -296,9 +295,8 @@ async function runStartupReconciliation() {
     await rememberReconciliation(record);
 
     const automation = settings.automationEnabled === true && settings.autoOpenFavorites === true;
-    const foreign = await foreignGroupTabIds();
     const tabs = (await chrome.tabs.query({ url: "*://www.twitch.tv/*" })).filter(
-      (tab) => !String(tab.url || "").includes("autolurk-grid") && !foreign.has(tab.id)
+      (tab) => !String(tab.url || "").includes("autolurk-grid")
     );
     record.openTwitchTabs = tabs.length;
     record.state = "ADOPTING";
@@ -346,12 +344,7 @@ async function runStartupReconciliation() {
         if ((await getManagedTabForUser(item.userId)) || (await getManagedTabForLogin(item.login))) {
           continue;
         }
-        const fresh = tabsForLogin(
-          (await chrome.tabs.query({ url: "*://www.twitch.tv/*" })).filter(
-            (tab) => !foreign.has(tab.id)
-          ),
-          item.login
-        );
+        const fresh = tabsForLogin(await chrome.tabs.query({ url: "*://www.twitch.tv/*" }), item.login);
         if (fresh.length) {
           const entry = await adoptGroupedStreamTab(fresh[0].id, item.channel, item.stream);
           if (entry) record.adopted += 1;
@@ -427,7 +420,6 @@ export async function adoptNavigatedChannel(tabId, url) {
   const managed = await getManagedTabs();
   if (managed[String(tabId)]) return null;
   if (await getManagedTabForLogin(login)) return null;
-  if ((await foreignGroupTabIds()).has(Number(tabId))) return null;
 
   const [favorites, follows, liveState] = await Promise.all([
     getFavorites(),

@@ -147,20 +147,23 @@ async function closeDuplicateStreamTabs(tabs) {
   for (const [login, matches] of byLogin) {
     if (matches.length < 2) continue;
 
-    // Keep the tab the user is looking at. Otherwise prefer one with managed
-    // playback evidence, then the oldest id (normally the original). On a
-    // server, the managed stream stays: opening the synced copy must not
-    // close the tab the rotation is checking.
+    // A tab inside an AutoLurk group stays: Brave mirrors that group to the
+    // other computer, so closing a tab there closes the other computer's
+    // stream too. A loose copy closes only here. Then keep the tab the user is
+    // looking at, then managed playback evidence, then the oldest id. On a
+    // server, the managed stream stays over an opened copy in the same state.
     matches.sort((a, b) => {
       const aEntry = managed[String(a.id)];
       const bEntry = managed[String(b.id)];
       const aScore =
+        (ourGroupIds.has(a.groupId) ? 2000 : 0) +
         (protectManaged && aEntry ? 1000 : 0) +
         (aEntry?.health === "media_playing" ? 200 : 0) +
         (a.active ? 100 : 0) +
         (aEntry ? 20 : 0) +
         (Number(aEntry?.lastVerifiedAt) > 0 ? 10 : 0);
       const bScore =
+        (ourGroupIds.has(b.groupId) ? 2000 : 0) +
         (protectManaged && bEntry ? 1000 : 0) +
         (bEntry?.health === "media_playing" ? 200 : 0) +
         (b.active ? 100 : 0) +
