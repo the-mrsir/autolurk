@@ -55,6 +55,13 @@ const MIGRATIONS = [
     }
     await chrome.storage.local.set({ [STORAGE_KEYS.SETTINGS]: cleaned });
   },
+
+  // 3 -> 4: a tab Brave closed because the other computer closed its mirror
+  // was recorded as the user closing that stream, which kept a live favorite
+  // from opening for the rest of its broadcast. Those records are dropped.
+  async () => {
+    await chrome.storage.local.set({ [STORAGE_KEYS.DISMISSED]: {} });
+  },
 ];
 
 // Installs that predate schemaVersion recorded progress as individual booleans.

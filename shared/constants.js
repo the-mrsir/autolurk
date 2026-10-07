@@ -18,7 +18,7 @@ export const ALARMS = {
 };
 
 // Bumped whenever stored data needs reshaping. See background/migrations.js.
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 // chrome.storage.session keys. These hold intent that must survive a service
 // worker restart but must not outlive the browser session.

@@ -60,6 +60,7 @@ import {
   closeGroupedStreamTab,
   closeManagedTab,
   consumeProgrammaticClose,
+  findTabForChannel,
   focusOrOpen,
   getManagedTabForLogin,
   getManagedTabForUser,
@@ -1109,6 +1110,30 @@ export async function handleManualTabClose(tabId) {
   const programmatic = await consumeProgrammaticClose(tabId);
   const liveState = await getLiveState();
   const stream = liveState[entry.userId];
+
+  // Brave mirrors a shared AutoLurk group, so the other computer closing its
+  // copy of a channel closes the same tab here. While another tab of that
+  // channel is still open, the stream is still being watched: that tab is
+  // taken over, and nothing is recorded as the user closing it.
+  if (!programmatic) {
+    const other = await findTabForChannel(entry.expectedChannel || entry.login);
+    if (other && Number(other.id) !== Number(tabId)) {
+      await clearBootWatch(tabId);
+      await mutateManagedTabs((current) => {
+        delete current[String(tabId)];
+        return current;
+      });
+      await adoptGroupedStreamTab(
+        other.id,
+        { userId: entry.userId, login: entry.login, displayName: entry.displayName },
+        stream || { streamId: entry.streamId }
+      ).catch(() => null);
+      await buildSnapshot();
+      await updateBadge();
+      return;
+    }
+  }
+
   if (!programmatic && stream?.streamId) {
     await mutateDismissed((dismissed) => {
       dismissed[entry.userId] = stream.streamId;

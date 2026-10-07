@@ -25,6 +25,7 @@ const {
 const {
   adoptNavigatedChannel,
   enforceSyncedFavoriteIntent,
+  handleManualTabClose,
   reconciliationNeedsAnotherPass,
   reconcileGroupedStreams,
   reconcileStartupChannels,
@@ -631,6 +632,37 @@ describe("health check", () => {
 
     assert.equal(reloads, 1);
     assert.notOk((await getManagedTabs())["1"].health === HEALTH.FAILED);
+  });
+});
+
+describe("a stream tab closing", () => {
+  const live = {
+    "1": { userId: "1", login: "streamer", isLive: true, streamId: "s1", stale: false },
+  };
+
+  it("takes over the other copy when Brave closes the mirrored tab", async () => {
+    mock.reset({
+      tabs: [{ id: 2, url: "https://www.twitch.tv/streamer", active: false }],
+      storage: { managedTabs: { "1": managed(1) }, liveState: live },
+    });
+
+    await handleManualTabClose(1);
+
+    const managedNow = await getManagedTabs();
+    assert.equal(managedNow["1"], undefined);
+    assert.ok(managedNow["2"], "the remaining copy was not taken over");
+    assert.deepEqual(mock.local.dismissed || {}, {}, "a mirrored close kept the favorite from opening");
+  });
+
+  it("still holds a stream the user closed for the rest of the broadcast", async () => {
+    mock.reset({
+      tabs: [],
+      storage: { managedTabs: { "1": managed(1) }, liveState: live },
+    });
+
+    await handleManualTabClose(1);
+
+    assert.equal(mock.local.dismissed?.["1"], "s1");
   });
 });
 
