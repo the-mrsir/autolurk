@@ -68,9 +68,11 @@ import {
   openManagedStream,
   pinQualityForTab,
   reconcileManagedTabs,
+  releaseManagedTab,
   updateLiveGroup,
   urlLeftExpectedChannel,
 } from "./tab-manager.js";
+import { isWatched, watchedHere, watchedStreams } from "./watching.js";
 import {
   API_FAILURE,
   getFollowedChannels,
@@ -152,6 +154,7 @@ export async function reconcileGroupedStreams(
       continue;
     }
     if (!settings.autoCloseOffline || favorite?.autoClose === false) continue;
+    if ((await watchedHere(await getManagedTabs())).tabIds.has(Number(tab.tabId))) continue;
     if (await closeGroupedStreamTab(tab.tabId)) {
       await logActivity(
         `Closed offline synced-group tab — ${channel.displayName || channel.login}`,
@@ -328,6 +331,7 @@ async function runStartupReconciliation() {
         if (already && Number(extra.id) === Number(already.tabId)) continue;
         const still = await getManagedTabs();
         if (still[String(extra.id)]) continue;
+        if ((await watchedHere(still)).tabIds.has(Number(extra.id))) continue;
         try {
           await chrome.tabs.remove(Number(extra.id));
         } catch {
@@ -1003,8 +1007,10 @@ async function maybeReplaceLowerPriority(candidate, max) {
   if (entries.length < max) return true;
 
   const incomingRank = PRIORITY_RANK[candidate.favorite.priority] || 2;
+  const watched = await watchedStreams(managed);
   let lowest = null;
   for (const entry of entries) {
+    if (isWatched(watched, entry.tabId, entry.login)) continue;
     const rank = PRIORITY_RANK[favorites[entry.userId]?.priority] || 2;
     if (rank < incomingRank && (!lowest || rank < lowest.rank)) {
       lowest = { entry, rank };
@@ -1032,6 +1038,8 @@ async function handleOfflineCloses(favorites, nextLive, covered, settings, optio
       .map((entry) => String(entry.userId))
   );
 
+  // A stream in front of the user waits until they look away.
+  const inFront = (await watchedHere(managed)).tabIds;
   const dueCloses = [];
   await mutatePendingCloses((pending) => {
     for (const entry of entries) {
@@ -1051,7 +1059,7 @@ async function handleOfflineCloses(favorites, nextLive, covered, settings, optio
         delete pending[userId];
         continue;
       }
-      if (now() - item.offlineSince >= graceMs) {
+      if (now() - item.offlineSince >= graceMs && !inFront.has(Number(item.tabId))) {
         dueCloses.push({ userId, tabId: item.tabId });
         delete pending[userId];
       }
@@ -1170,12 +1178,23 @@ export async function handleManagedNavigation(tabId, url) {
   if (!settings.closeRaids) return;
   if (Date.now() - (entry.openedAt || 0) < TAB_LOAD_GRACE_MS) return;
   if (urlLeftExpectedChannel(entry, url)) {
-    const next = extractChannelFromUrl(url);
-    await logActivity(`Raid detected: ${entry.expectedChannel} → ${next}`);
-    await closeManagedTab(tabId);
-    await buildSnapshot();
-    await updateBadge();
+    await endRaidedTab(tabId, entry, extractChannelFromUrl(url));
   }
+}
+
+// A raid someone is watching goes on as their own tab, out of the group, so
+// neither computer closes it.
+async function endRaidedTab(tabId, entry, next) {
+  await logActivity(`Raid detected: ${entry.expectedChannel} → ${next}`);
+  const watched = await watchedStreams(await getManagedTabs());
+  if (isWatched(watched, tabId, entry.expectedChannel) || isWatched(watched, -1, next)) {
+    await releaseManagedTab(entry.userId);
+    await chrome.tabs.ungroup(Number(tabId)).catch(() => {});
+  } else {
+    await closeManagedTab(tabId);
+  }
+  await buildSnapshot();
+  await updateBadge();
 }
 
 export async function handleChannelChanged(tabId, login) {
@@ -1187,10 +1206,7 @@ export async function handleChannelChanged(tabId, login) {
   if (!settings.closeRaids) return;
   if (Date.now() - (entry.openedAt || 0) < TAB_LOAD_GRACE_MS) return;
   if (login && login !== entry.expectedChannel) {
-    await logActivity(`Raid detected: ${entry.expectedChannel} → ${login}`);
-    await closeManagedTab(tabId);
-    await buildSnapshot();
-    await updateBadge();
+    await endRaidedTab(tabId, entry, login);
   }
 }
 

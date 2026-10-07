@@ -18,6 +18,7 @@ import { logActivity } from "./activity.js";
 // ("import() is disallowed on ServiceWorkerGlobalScope"), measured in Chrome,
 // so the lazy version silently broke every recovery attempt that reached it.
 import { closeManagedTab, openManagedStream, restartManagedTab } from "./tab-manager.js";
+import { isWatched, publishWatching, watchedStreams } from "./watching.js";
 
 const BOOT_WATCH_PREFIX = "boot-watch-";
 const PROBE_TIMEOUT_MS = 4000;
@@ -338,6 +339,7 @@ async function healthCheckPass() {
   const focused = await focusedWindowId();
   const at = Date.now();
   let restarts = 0;
+  await publishWatching(managed, at).catch(() => {});
 
   for (const [tabId, stored] of Object.entries(managed)) {
     let tab;
@@ -595,6 +597,13 @@ export async function runRecovery(tabId, entry, reason, options = {}) {
   if (!options.force && !shouldAttemptRecovery(entry, at)) return entry;
 
   let stage = nextRecoveryStage(entry);
+
+  // Reopening closes the tab, and Brave closes the grouped copy on the other
+  // computer with it. A stream being watched is reloaded instead.
+  if (stage === RECOVERY_STAGE.REOPEN) {
+    const watched = await watchedStreams(await getManagedTabs());
+    if (isWatched(watched, tabId, entry.expectedChannel || entry.login)) stage = RECOVERY_STAGE.RELOAD;
+  }
 
   // Never yank a tab the user is actually looking at. Nudging is fine; a
   // reload would destroy whatever they were reading in chat.

@@ -19,6 +19,7 @@ import {
 import { streamIsOpenable } from "../shared/poll-logic.js";
 import { logActivity } from "./activity.js";
 import { groupHeldElsewhere, holdGroupClaim, releaseGroupClaim } from "./group-claim.js";
+import { watchedStreams } from "./watching.js";
 import {
   clearBootWatch,
   ensureTabMuted,
@@ -143,6 +144,7 @@ async function closeDuplicateStreamTabs(tabs) {
   }
 
   const protectManaged = (await getSettings()).serverRotation === true;
+  let watched = null;
   let removed = 0;
   for (const [login, matches] of byLogin) {
     if (matches.length < 2) continue;
@@ -174,7 +176,17 @@ async function closeDuplicateStreamTabs(tabs) {
 
     const keeper = matches[0];
     const source = matches.map((tab) => managed[String(tab.id)]).find(Boolean);
-    const duplicates = matches.slice(1);
+    // A copy someone is watching stays. A grouped copy also stays while the
+    // channel is watched on another computer: closing it closes theirs.
+    watched ??= await watchedStreams(managed);
+    const duplicates = matches
+      .slice(1)
+      .filter(
+        (tab) =>
+          !watched.tabIds.has(Number(tab.id)) &&
+          !(ourGroupIds.has(tab.groupId) && watched.elsewhere.has(login))
+      );
+    if (!duplicates.length) continue;
 
     await mutateManagedTabs((current) => {
       if (!current[String(keeper.id)] && source) {

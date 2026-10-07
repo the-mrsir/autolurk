@@ -12,8 +12,10 @@ const {
   handlePlayerHealth,
   requestRecovery,
   runHealthCheck,
+  runRecovery,
   resetHealth,
 } = await import("../background/stream-boot.js");
+const { publishWatching, resetWatchingForTests } = await import("../background/watching.js");
 const {
   BOOTSTRAP_TIMING,
   closeManagedTab,
@@ -25,6 +27,7 @@ const {
 const {
   adoptNavigatedChannel,
   enforceSyncedFavoriteIntent,
+  handleChannelChanged,
   handleManualTabClose,
   reconciliationNeedsAnotherPass,
   reconcileGroupedStreams,
@@ -663,6 +666,117 @@ describe("a stream tab closing", () => {
     await handleManualTabClose(1);
 
     assert.equal(mock.local.dismissed?.["1"], "s1");
+  });
+});
+
+describe("a stream someone is watching", () => {
+  const old = { openedAt: NOW() - 10 * 60_000 };
+
+  it("stays open through a raid and leaves the group as the user's own tab", async () => {
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/raider", active: true, groupId: 5 }],
+      storage: { managedTabs: { "1": managed(1, old) }, settings: { closeRaids: true } },
+    });
+
+    await handleChannelChanged(1, "raider");
+
+    assert.ok(mock.tabState.has(1), "the raid closed the stream being watched");
+    assert.equal(mock.tabState.get(1).groupId, -1);
+    assert.equal((await getManagedTabs())["1"], undefined);
+  });
+
+  it("still closes a raid in a background tab", async () => {
+    mock.reset({
+      tabs: [
+        { id: 9, url: "https://www.twitch.tv/other", active: true },
+        { id: 1, url: "https://www.twitch.tv/raider", active: false },
+      ],
+      storage: { managedTabs: { "1": managed(1, old) }, settings: { closeRaids: true } },
+    });
+
+    await handleChannelChanged(1, "raider");
+
+    assert.notOk(mock.tabState.has(1));
+  });
+
+  it("keeps a raid open that another computer is watching", async () => {
+    mock.reset({
+      tabs: [
+        { id: 9, url: "https://www.twitch.tv/other", active: true },
+        { id: 1, url: "https://www.twitch.tv/raider", active: false },
+      ],
+      storage: { managedTabs: { "1": managed(1, old) }, settings: { closeRaids: true } },
+    });
+    mock.seedSync({ "watching:laptop": { logins: ["streamer"], at: NOW() } });
+
+    await handleChannelChanged(1, "raider");
+
+    assert.ok(mock.tabState.has(1), "closing it here would close it on the other computer");
+  });
+
+  it("reloads instead of reopening a stream another computer is watching", async () => {
+    mock.reset({
+      tabs: [
+        { id: 9, url: "https://www.twitch.tv/other", active: true },
+        { id: 1, url: "https://www.twitch.tv/streamer", active: false },
+      ],
+      storage: {
+        managedTabs: { "1": managed(1, { health: HEALTH.STALLED, recoveryAttempts: 2, mediaPlaying: false }) },
+        settings: { serverRotation: true },
+      },
+    });
+    mock.seedSync({ "watching:laptop": { logins: ["streamer"], at: NOW() } });
+
+    await runRecovery(1, (await getManagedTabs())["1"], "stalled", { force: true, allowNavigation: true });
+
+    assert.ok(mock.tabState.has(1), "the reopen closed the stream on the other computer");
+    assert.equal((await getManagedTabs())["1"]?.recoveryStage, RECOVERY_STAGE.RELOAD);
+  });
+
+  it("ignores a watching note that has gone stale", async () => {
+    mock.reset({
+      tabs: [
+        { id: 9, url: "https://www.twitch.tv/other", active: true },
+        { id: 1, url: "https://www.twitch.tv/streamer", active: false },
+      ],
+      storage: {
+        managedTabs: { "1": managed(1, { health: HEALTH.STALLED, recoveryAttempts: 2, mediaPlaying: false }) },
+        settings: { serverRotation: true },
+      },
+    });
+    mock.seedSync({ "watching:laptop": { logins: ["streamer"], at: NOW() - 10 * 60_000 } });
+
+    await runRecovery(1, (await getManagedTabs())["1"], "stalled", { force: true, allowNavigation: true });
+
+    assert.notOk(mock.tabState.has(1), "a stale note should not hold a stuck stream forever");
+  });
+
+  it("tells the other computers which channel is in front here", async () => {
+    resetWatchingForTests();
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: true }],
+      storage: { managedTabs: { "1": managed(1) }, meta: { machineId: "desk" } },
+    });
+
+    await publishWatching(await getManagedTabs());
+
+    assert.deepEqual(mock.sync["watching:desk"]?.logins, ["streamer"]);
+  });
+
+  it("does not count a server's rotation tab as watched", async () => {
+    resetWatchingForTests();
+    mock.reset({
+      tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: true }],
+      storage: {
+        managedTabs: { "1": managed(1) },
+        meta: { machineId: "server" },
+        settings: { serverRotation: true },
+      },
+    });
+
+    await publishWatching(await getManagedTabs());
+
+    assert.equal(mock.sync["watching:server"], undefined);
   });
 });
 

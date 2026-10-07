@@ -48,6 +48,7 @@ import { recordSevenTvExtension } from "./seventv.js";
 import { rotateServerStreams, rotateServerStreamsIfDue } from "./server-rotation.js";
 import { noteStreakTabClosed, scanWatchStreaks, stopWatchStreaks, tickWatchStreaks } from "./streaks.js";
 import { checkForUpdate } from "./updates.js";
+import { publishWatching } from "./watching.js";
 import {
   addChannelByLogin,
   adoptNavigatedChannel,
@@ -791,6 +792,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         )
         .catch(() => {});
     }
+    publishWatching(managed).catch(() => {});
     const others = await Promise.all(
       Object.values(managed)
         .filter((entry) => Number(entry.tabId) !== Number(activeInfo.tabId))
