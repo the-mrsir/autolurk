@@ -7,6 +7,7 @@ import {
   mutateManagedTabs,
   mutateMeta,
   mutateSessionValue,
+  setSessionValue,
   updateManagedTab,
 } from "../shared/storage.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "../shared/utilities.js";
 import { streamIsOpenable } from "../shared/poll-logic.js";
 import { logActivity } from "./activity.js";
+import { groupHeldElsewhere, holdGroupClaim, releaseGroupClaim } from "./group-claim.js";
 import {
   clearBootWatch,
   ensureTabMuted,
@@ -116,129 +118,24 @@ export async function reconcileManagedTabs() {
   return next;
 }
 
-// Brave and Chrome mirror an open tab group to every computer on the same sync
-// account. Moving or closing a tab in another computer's AutoLurk group does
-// the same to that computer's streams, which then reopen in a new group, and
-// the next merge starts it all again. Each computer keeps one group of its own
-// and leaves every other AutoLurk group exactly as it is.
-//
-// Ours: the remembered group, else the group holding our managed tabs, else
-// (nothing of ours open yet, as after a browser restart) the AutoLurk group
-// with the most tabs. Foreign: every other AutoLurk group that holds none of
-// our managed tabs.
-export async function groupOwnership(managedTabs) {
-  const managed = managedTabs || (await getManagedTabs());
-  let titled = [];
-  try {
-    titled = (await chrome.tabGroups.query({})).filter((group) =>
-      String(group.title || "").startsWith(GROUP_NAME)
-    );
-  } catch {
-    return { own: null, foreign: [], foreignTabIds: new Set(), known: false };
-  }
-
-  const holding = new Map();
-  for (const entry of Object.values(managed || {})) {
-    try {
-      const tab = await chrome.tabs.get(Number(entry.tabId));
-      if (tab.groupId == null || tab.groupId === -1) continue;
-      holding.set(tab.groupId, (holding.get(tab.groupId) || 0) + 1);
-    } catch {
-      // Closed since the entry was written.
-    }
-  }
-
-  const storedId = (await getMeta()).groupId ?? null;
-  const stored = await groupInfo(storedId);
-  let own = null;
-  if (stored && looksLikeOurs(stored) && !isStagingWindow(stored.windowId)) own = stored;
-
-  if (!own) {
-    let best = null;
-    let bestCount = 0;
-    for (const [groupId, count] of [...holding].sort((a, b) => a[0] - b[0])) {
-      if (count <= bestCount) continue;
-      const group = await groupInfo(groupId);
-      if (!group || !looksLikeOurs(group) || isStagingWindow(group.windowId)) continue;
-      best = group;
-      bestCount = count;
-    }
-    own = best;
-  }
-
-  if (!own && titled.length) {
-    const ranked = [];
-    for (const group of titled) {
-      if (isStagingWindow(group.windowId)) continue;
-      let count = 0;
-      try {
-        count = (await chrome.tabs.query({ groupId: group.id })).length;
-      } catch {
-        count = 0;
-      }
-      ranked.push({ group, count });
-    }
-    ranked.sort((a, b) => b.count - a.count || a.group.id - b.group.id);
-    own = ranked[0]?.group || null;
-  }
-
-  const foreign = titled.filter((group) => group.id !== own?.id && !holding.has(group.id));
-  const foreignTabIds = new Set();
-  for (const group of foreign) {
-    try {
-      for (const tab of await chrome.tabs.query({ groupId: group.id })) foreignTabIds.add(tab.id);
-    } catch {
-      // The group closed while it was being listed.
-    }
-  }
-  return { own, foreign, foreignTabIds, known: true };
-}
-
-export async function foreignGroupTabIds() {
-  return (await groupOwnership()).foreignTabIds;
-}
-
-// Another computer's streams, opened here. Muting and discarding stay on this
-// computer, so they cost nothing here and change nothing there.
-async function quietForeignGroups(ownership) {
-  const settings = await getSettings();
-  for (const tabId of ownership.foreignTabIds) {
-    let tab;
-    try {
-      tab = await chrome.tabs.get(Number(tabId));
-    } catch {
-      continue;
-    }
-    if (tab.active || !extractChannelFromUrl(tab.url)) continue;
-    try {
-      if (settings.muteTabs !== false && !tab.mutedInfo?.muted) {
-        expectExtensionMute(tab.id);
-        await chrome.tabs.update(tab.id, { muted: true });
-      }
-      if (!tab.discarded && typeof chrome.tabs.discard === "function") {
-        await chrome.tabs.discard(tab.id);
-      }
-    } catch {
-      // Chrome refuses to discard some tabs; muted is enough.
-    }
-  }
-}
-
 // Repairs both historical duplicates and an interrupted staging request. Only
-// tabs already managed by AutoLurk, or tabs sitting in this computer's
-// AutoLurk group, are candidates; two ordinary Twitch tabs the user opened
-// remain their own, and another computer's group is never touched.
+// tabs already managed by AutoLurk, or tabs sitting in a group named AutoLurk,
+// are candidates; two ordinary Twitch tabs the user opened remain their own.
 async function closeDuplicateStreamTabs(tabs) {
   const managed = await getManagedTabs();
-  const ownership = await groupOwnership(managed);
   const ourGroupIds = new Set();
-  if (ownership.own) ourGroupIds.add(ownership.own.id);
+  try {
+    for (const group of await chrome.tabGroups.query({})) {
+      if (String(group.title || "").startsWith(GROUP_NAME)) ourGroupIds.add(group.id);
+    }
+  } catch {
+    // Managed entries alone are enough for the basic cleanup.
+  }
 
   const byLogin = new Map();
   for (const tab of tabs) {
     const login = extractChannelFromUrl(tab.url);
     if (!login) continue;
-    if (ownership.foreignTabIds.has(tab.id)) continue;
     if (!managed[String(tab.id)] && !ourGroupIds.has(tab.groupId)) continue;
     const matches = byLogin.get(login) || [];
     matches.push(tab);
@@ -327,11 +224,9 @@ export async function findTabForChannel(login) {
   const target = normalizeLogin(login);
   if (!target) return null;
   const tabs = await chrome.tabs.query({ url: "*://www.twitch.tv/*" });
-  const foreign = await foreignGroupTabIds();
   return (
     tabs.find((tab) => {
       if (String(tab.url || "").includes("autolurk-grid")) return false;
-      if (foreign.has(tab.id)) return false;
       return extractChannelFromUrl(tab.url) === target;
     }) || null
   );
@@ -344,11 +239,8 @@ export async function getAutoLurkGroupedTabs() {
   const found = new Map();
   let groups;
   try {
-    const ownership = await groupOwnership();
-    if (!ownership.known) return [];
-    const foreign = new Set(ownership.foreign.map((group) => group.id));
-    groups = (await chrome.tabGroups.query({})).filter(
-      (group) => String(group.title || "").startsWith(GROUP_NAME) && !foreign.has(group.id)
+    groups = (await chrome.tabGroups.query({})).filter((group) =>
+      String(group.title || "").startsWith(GROUP_NAME)
     );
   } catch {
     return [];
@@ -1479,6 +1371,59 @@ async function chooseHomeWindow(tabs, storedGroupId) {
   return best;
 }
 
+// Chrome can sync tab groups created independently on two computers. Their
+// numeric group ids are local to each browser, so storage cannot identify the
+// shared logical group. Discover every locally-visible AutoLurk group by title
+// before selecting a window or considering creation.
+async function discoverAutoLurkGroups(tabs, storedGroupId) {
+  const groups = new Map();
+  let enumerationSucceeded = false;
+
+  try {
+    for (const group of await chrome.tabGroups.query({})) {
+      if (String(group.title || "").startsWith(GROUP_NAME)) groups.set(group.id, group);
+    }
+    enumerationSucceeded = true;
+  } catch {
+    // Fail closed below: an unavailable global query is never evidence that
+    // no AutoLurk group exists.
+  }
+
+  for (const tab of tabs) {
+    if (tab.groupId == null || tab.groupId === -1 || groups.has(tab.groupId)) continue;
+    const group = await groupInfo(tab.groupId);
+    if (group && looksLikeOurs(group)) groups.set(group.id, group);
+  }
+
+  const stored = await groupInfo(storedGroupId);
+  if (stored && tabs.some((tab) => tab.groupId === stored.id)) {
+    groups.set(stored.id, stored);
+  }
+
+  const candidates = [...groups.values()];
+  let canonical = null;
+  if (candidates.length) {
+    const ranked = await Promise.all(
+      candidates.map(async (group) => {
+        try {
+          return { group, count: (await chrome.tabs.query({ groupId: group.id })).length };
+        } catch {
+          return { group, count: 0 };
+        }
+      })
+    );
+    ranked.sort(
+      (a, b) =>
+        b.count - a.count ||
+        Number(b.group.id === storedGroupId) - Number(a.group.id === storedGroupId) ||
+        Number(a.group.id) - Number(b.group.id)
+    );
+    canonical = ranked[0].group;
+  }
+
+  return { canonical, groups: candidates, enumerationSucceeded };
+}
+
 // The single group in the home window, adopted if one is already there.
 async function resolveHomeGroup(home, tabs, storedGroupId) {
   const stored = await groupInfo(storedGroupId);
@@ -1622,18 +1567,29 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   };
 
   let tabs = await ourManagedTabs(managedTabs);
-  const ownership = await groupOwnership(managedTabs);
+  const discovered = await discoverAutoLurkGroups(tabs, stored);
   if (!tabs.length) {
     await remember(null);
+    if (!discovered.groups.length) await releaseGroupClaim();
     return;
   }
   if (!settings.groupTabs) return;
-  if (!ownership.known) return;
-  const foreignIds = new Set(ownership.foreign.map((group) => group.id));
 
-  let home = ownership.own?.windowId ?? (await chooseHomeWindow(tabs, stored));
-  if (home == null) return;
+  // A server is already showing one window. A second AutoLurk group — usually
+  // the other computer's, which Chrome only materializes once it is opened —
+  // has to fold into that window. Moving the live streams onto the new group
+  // hides them, and the rotation then has nothing it can see.
+  let home = discovered.canonical?.windowId ?? (await chooseHomeWindow(tabs, stored));
   const showing = tabs.find((tab) => tab.active);
+  if (settings.serverRotation && showing?.windowId != null) {
+    home = showing.windowId;
+  } else if (settings.serverRotation) {
+    const storedGroup = await groupInfo(stored);
+    if (storedGroup && tabs.some((tab) => tab.windowId === storedGroup.windowId)) {
+      home = storedGroup.windowId;
+    }
+  }
+  if (home == null) return;
   const keepInFront = settings.serverRotation && showing ? Number(showing.id) : null;
 
   // One window first, then one group. Grouping before the moves would only
@@ -1643,22 +1599,34 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     home
   );
   tabs = await ourManagedTabs(managedTabs);
-  if (!tabs.length) {
-    await remember(ownership.own?.id ?? null);
+  if (!tabs.length && discovered.groups.length === 0) {
+    await remember(null);
     return;
   }
 
-  let groupId = ownership.own?.id ?? (await resolveHomeGroup(home, tabs, stored));
-  if (groupId != null && foreignIds.has(groupId)) groupId = null;
+  let groupId = settings.serverRotation
+    ? await resolveHomeGroup(home, tabs, stored)
+    : discovered.canonical?.id ?? (await resolveHomeGroup(home, tabs, stored));
 
   // Reclaim the tabs of every other group of ours before folding them in, so
-  // an existing split collapses instead of persisting. Another computer's
-  // group is not one of ours.
+  // an existing split collapses instead of persisting.
   const strays = await ourOtherGroupIds(groupId, tabs);
-  for (const id of foreignIds) strays.delete(id);
-  const reclaimed = (await tabsInGroups(strays)).filter(
-    (id) => !ownership.foreignTabIds.has(id)
-  );
+  for (const group of discovered.groups) {
+    if (group.id !== groupId) strays.add(group.id);
+  }
+  // A collapsed group Chrome just synced does not give up its tabs until it
+  // is open. Open it in place, then pull the tabs across, without sending the
+  // window the server is using to the back.
+  if (settings.serverRotation) {
+    for (const strayId of strays) {
+      try {
+        await chrome.tabGroups.update(strayId, { collapsed: false });
+      } catch {
+        // The group can vanish as its last tab leaves.
+      }
+    }
+  }
+  const reclaimed = await tabsInGroups(strays);
   await moveIntoWindow(reclaimed, home);
 
   const wanted = [...new Set([...tabs.map((tab) => tab.id), ...reclaimed])];
@@ -1686,9 +1654,12 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     // Never interpret an API failure as "there are no groups." That fail-open
     // behavior was able to create one AutoLurk group per computer. Look again
     // before creating: a group can appear while the tabs were moving.
-    const again = await groupOwnership(await getManagedTabs());
-    if (!again.known) return;
-    const existing = again.own && !foreignIds.has(again.own.id) ? again.own : null;
+    if (!discovered.enumerationSucceeded) return;
+    const again = await discoverAutoLurkGroups(await ourManagedTabs(managedTabs), stored);
+    if (!again.enumerationSucceeded) return;
+    const existing = settings.serverRotation
+      ? again.groups.find((group) => group.windowId === home) || null
+      : again.canonical;
     if (existing) {
       groupId = existing.id;
       try {
@@ -1701,11 +1672,19 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
         return;
       }
     } else {
+      // The other computer's group is a closed saved group here, which the
+      // tab group API cannot see. Its claim in sync storage is the only sign
+      // it exists, and opening it is what lets these tabs join it.
+      if (await groupHeldElsewhere()) {
+        await noteGroupHeldElsewhere();
+        return;
+      }
       try {
         groupId = await chrome.tabs.group({ tabIds: wanted, createProperties: { windowId: home } });
       } catch {
         return;
       }
+      await setSessionValue(SESSION_KEYS.GROUP, { createdId: groupId });
     }
   }
 
@@ -1753,6 +1732,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
 
   await remember(groupId);
+  if (await yieldGroupIfHeldElsewhere(groupId)) return;
   await muteAutoLurkTabs();
 
   // Moving tabs clears the one that was in front. Put it back so the server
@@ -1782,6 +1762,43 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
 }
 
+async function noteGroupHeldElsewhere() {
+  let first = false;
+  await mutateSessionValue(SESSION_KEYS.GROUP, {}, (current) => {
+    if (current.noted) return undefined;
+    first = true;
+    return { ...current, noted: true };
+  });
+  if (first) {
+    await logActivity(
+      `Another computer has the ${GROUP_NAME} group open. Open it from saved tab groups and these streams join it.`
+    );
+  }
+}
+
+// Keeps this computer's claim on the group current. When two computers each
+// made a group at the same moment, the one whose claim sync kept holds the
+// group, and the other takes its tabs out of the group it made so only one
+// group remains. A group this computer joined is the shared one and is kept.
+async function yieldGroupIfHeldElsewhere(groupId) {
+  if (groupId == null) return false;
+  const created = (await getSessionValue(SESSION_KEYS.GROUP, {}))?.createdId;
+  const madeHere = created != null && Number(created) === Number(groupId);
+  if ((await holdGroupClaim()) === "held" || !madeHere) return false;
+
+  let ids = [];
+  try {
+    ids = (await chrome.tabs.query({ groupId })).map((tab) => tab.id);
+    if (ids.length) await chrome.tabs.ungroup(ids);
+  } catch {
+    return false;
+  }
+  await setSessionValue(SESSION_KEYS.GROUP, {});
+  await mutateMeta((meta) => (meta.groupId === groupId ? { ...meta, groupId: null } : undefined));
+  await noteGroupHeldElsewhere();
+  return true;
+}
+
 // Consolidation used to run only when a stream opened, closed or reached
 // playback. Anything that produced a second group between those moments simply
 // stayed, sometimes for hours, which is what "it keeps making extra groups"
@@ -1798,13 +1815,10 @@ export async function consolidateIfSplit() {
   if (!Object.keys(managed).length) return dupesClosed;
 
   const tabs = await ourManagedTabs(managed);
-  const ownership = await groupOwnership(managed);
-  if (ownership.foreignTabIds.size) await quietForeignGroups(ownership);
   let autoLurkGroups = 0;
   try {
-    const foreign = new Set(ownership.foreign.map((group) => group.id));
-    autoLurkGroups = (await chrome.tabGroups.query({})).filter(
-      (group) => String(group.title || "").startsWith(GROUP_NAME) && !foreign.has(group.id)
+    autoLurkGroups = (await chrome.tabGroups.query({})).filter((group) =>
+      String(group.title || "").startsWith(GROUP_NAME)
     ).length;
   } catch {
     autoLurkGroups = 0;
@@ -1821,7 +1835,9 @@ export async function consolidateIfSplit() {
   }
   const loose = tabs.some((tab) => tab.groupId === -1 || !holding.has(tab.groupId));
 
-  if (holding.size <= 1 && !loose && !dupesClosed && autoLurkGroups <= 1) return false;
+  if (holding.size <= 1 && !loose && !dupesClosed && autoLurkGroups <= 1) {
+    return yieldGroupIfHeldElsewhere([...holding][0] ?? null);
+  }
 
   await updateLiveGroup(managed);
   return true;

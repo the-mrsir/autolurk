@@ -298,13 +298,15 @@ export function installChromeMock({ tabs = [], storage = {} } = {}) {
         return Promise.resolve();
       },
       reload: (id) => (tabState.has(Number(id)) ? Promise.resolve() : Promise.reject(new Error("No tab"))),
-      discard: (id) => {
-        const tab = tabState.get(Number(id));
-        if (!tab) return Promise.reject(new Error("No tab"));
-        tab.discarded = true;
-        return Promise.resolve({ id: Number(id), ...tab });
-      },
       group: (options) => groupTabs(options),
+      ungroup: (tabIds) => {
+        for (const id of (Array.isArray(tabIds) ? tabIds : [tabIds]).map(Number)) {
+          const tab = tabState.get(id);
+          if (tab) tab.groupId = -1;
+        }
+        pruneEmptyGroups();
+        return Promise.resolve();
+      },
       sendMessage: (id, message) => {
         const handler = messageHandlers.get(Number(id));
         if (!handler) return Promise.reject(new Error("Receiving end does not exist"));

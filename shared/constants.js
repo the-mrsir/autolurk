@@ -45,6 +45,9 @@ export const SESSION_KEYS = {
   WATCHDOG: "watchdogSession",
   // Startup reconciliation. Session lifetime matches one browser run.
   RECONCILE: "startupReconciliation",
+  // The AutoLurk group this browser run created, as opposed to one it joined.
+  // Group ids are only valid for one browser run.
+  GROUP: "autoLurkGroup",
 };
 
 export const STORAGE_KEYS = {
