@@ -1,7 +1,7 @@
 import { MESSAGE } from "../shared/constants.js";
 import { checkForUpdate } from "../background/updates.js";
 import { describeUpdate } from "../shared/update-logic.js";
-import { allowUpdateOrigin } from "./update-client.js";
+import { allowUpdateOrigin, installUpdate } from "./update-client.js";
 import { allowLoopback } from "./watchdog-client.js";
 import { watchdogStatusText } from "../shared/watchdog-logic.js";
 import {
@@ -896,6 +896,18 @@ $("checkUpdateBtn").addEventListener("click", async () => {
     $("updateStatus").textContent = error.message;
   } finally {
     $("checkUpdateBtn").disabled = false;
+  }
+});
+
+$("installUpdateBtn").addEventListener("click", async () => {
+  $("installUpdateBtn").disabled = true;
+  $("updateStatus").textContent = "Updating…";
+  try {
+    $("updateStatus").textContent = await installUpdate($("updateManifestUrl").value.trim());
+  } catch (error) {
+    $("updateStatus").textContent = error.message;
+  } finally {
+    $("installUpdateBtn").disabled = false;
   }
 });
 

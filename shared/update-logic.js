@@ -87,6 +87,33 @@ export function updateInstallRequest(manifest) {
   return { permissions: ["scripting"], origins };
 }
 
+// The helper in updater/ is the only thing allowed to write into the folder.
+// It is installed once per computer and answers this extension id only.
+export const UPDATER_HOST = "com.autolurk.updater";
+export const DEFAULT_UPDATE_REPO = "https://github.com/the-mrsir/autolurk";
+
+export function updaterRequest(manifestUrl) {
+  const repo = parseGithubRepo(manifestUrl) || parseGithubRepo(DEFAULT_UPDATE_REPO);
+  return { action: "update", owner: repo.owner, repo: repo.repo, branch: repo.branch || "main" };
+}
+
+export function updaterMissing(error) {
+  return /native messaging host not found|host not found|forbidden/i.test(String(error?.message || error || ""));
+}
+
+// The helper reports the version now in the folder. Chrome keeps running the
+// version it loaded until the extension reloads.
+export function readUpdaterReply(reply, loadedVersion) {
+  if (!reply || reply.ok !== true) {
+    return { reload: false, text: `The update failed: ${reply?.error || "the updater gave no answer."}` };
+  }
+  const version = String(reply.version || "");
+  const newer = compareVersions(version, loadedVersion);
+  if (newer == null) return { reload: false, text: "The updater wrote a folder with no valid version." };
+  if (newer > 0) return { reload: true, text: `Updated to ${version}. Reloading AutoLurk…` };
+  return { reload: false, text: `Already on the latest version (${loadedVersion}).` };
+}
+
 export function parseUpdateManifest(body) {
   const data = typeof body === "string" ? JSON.parse(body) : body;
   const version = String(data?.version || "");
@@ -114,7 +141,7 @@ export function describeUpdate(update, manifestUrl) {
   if (!String(manifestUrl || "").trim()) return "Add an update address, then check.";
   if (update?.error) return update.error;
   if (updateStillNewer(update)) {
-    return `Version ${update.availableVersion} is on GitHub. Chrome cannot write it into a folder load.`;
+    return `Version ${update.availableVersion} is on GitHub. Click Update now to install it.`;
   }
   if (update?.checkedAt && update?.latestVersion) {
     return `You're on the latest version (${update.latestVersion}).`;

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { deflateRawSync } from "node:zlib";
 import { assert, describe, it } from "./harness.js";
@@ -11,8 +12,12 @@ import {
   listedUpdateOrigins,
   parseGithubRepo,
   parseUpdateManifest,
+  readUpdaterReply,
   safeZipPath,
+  UPDATER_HOST,
   updateInstallRequest,
+  updaterMissing,
+  updaterRequest,
   updateOrigins,
   validatePackageManifest,
 } from "../shared/update-logic.js";
@@ -145,7 +150,7 @@ describe("extension updates", () => {
     assert.equal(describeUpdate({}, ""), "Add an update address, then check.");
     assert.equal(
       describeUpdate({ packageUrl: "https://example.com/a.zip", availableVersion: "1.2.7" }, "https://example.com/updates.json"),
-      "Version 1.2.7 is on GitHub. Chrome cannot write it into a folder load."
+      "Version 1.2.7 is on GitHub. Click Update now to install it."
     );
     assert.equal(
       describeUpdate({ checkedAt: 1, latestVersion: "1.2.6" }, "https://example.com/updates.json"),
@@ -264,6 +269,56 @@ describe("extension updates", () => {
       assert.equal(current.latestVersion, "1.2.6");
     } finally {
       globalThis.fetch = original;
+    }
+  });
+});
+
+describe("Update now", () => {
+  it("asks the helper for the configured repository, or AutoLurk's own", () => {
+    assert.deepEqual(updaterRequest("https://github.com/someone/fork/tree/dev"), {
+      action: "update",
+      owner: "someone",
+      repo: "fork",
+      branch: "dev",
+    });
+    assert.deepEqual(updaterRequest(""), { action: "update", owner: "the-mrsir", repo: "autolurk", branch: "main" });
+  });
+
+  it("reloads only when the folder now holds a newer version", () => {
+    assert.equal(readUpdaterReply({ ok: true, version: "1.2.49" }, "1.2.48").reload, true);
+    const same = readUpdaterReply({ ok: true, version: "1.2.48" }, "1.2.48");
+    assert.equal(same.reload, false);
+    assert.ok(same.text.includes("latest"));
+    const failed = readUpdaterReply({ ok: false, error: "git pull failed: conflict" }, "1.2.48");
+    assert.equal(failed.reload, false);
+    assert.ok(failed.text.includes("git pull failed"));
+    assert.equal(readUpdaterReply(undefined, "1.2.48").reload, false);
+  });
+
+  it("tells a computer without the helper how to set it up", () => {
+    assert.ok(updaterMissing(new Error("Specified native messaging host not found.")));
+    assert.ok(updaterMissing(new Error("Access to the specified native messaging host is forbidden.")));
+    assert.notOk(updaterMissing(new Error("Native host has exited.")));
+  });
+
+  it("asks for native messaging only when Update now is used", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+    assert.ok(manifest.optional_permissions.includes("nativeMessaging"));
+    assert.notOk(manifest.permissions.includes("nativeMessaging"));
+  });
+
+  it("registers the helper for the id the manifest key gives this extension", () => {
+    const manifest = JSON.parse(readFileSync(new URL("../manifest.json", import.meta.url), "utf8"));
+    const hash = createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex").slice(0, 32);
+    const id = [...hash].map((digit) => String.fromCharCode(97 + parseInt(digit, 16))).join("");
+    for (const file of ["install-windows.ps1", "install-linux.sh"]) {
+      const text = readFileSync(new URL(`../updater/${file}`, import.meta.url), "utf8");
+      assert.ok(text.includes(`"${id}"`), `${file} registers ${id}`);
+      assert.ok(text.includes(UPDATER_HOST), `${file} registers ${UPDATER_HOST}`);
+    }
+    for (const file of ["autolurk-updater.ps1", "autolurk-updater.py"]) {
+      const text = readFileSync(new URL(`../updater/${file}`, import.meta.url), "utf8");
+      assert.ok(text.includes("would change the extension id"), `${file} checks the key`);
     }
   });
 });

@@ -32,11 +32,14 @@ Both computers have to show the same extension ID on that page. Do not change or
 
 ## Updates
 
-Chrome will not update an extension loaded from a folder.
-
 **Settings → Updates** is pointed at https://github.com/the-mrsir/autolurk. Click **Check for updates** once so Chrome can reach GitHub. After that it checks about twice a day.
 
-When the repo version is higher, pull this folder if it is the git checkout, or replace the folder, then click Reload on chrome://extensions. Chrome will not write the files in for you.
+**Update now** installs the GitHub version and reloads AutoLurk. It uses a small helper in `updater/`, set up once per computer from the AutoLurk folder:
+
+- Windows: double-click `updater\install-windows.cmd`
+- Linux: `sh updater/install-linux.sh` (needs `python3`)
+
+The first click asks to let AutoLurk talk to that helper. A git checkout is updated with `git pull`; any other folder gets GitHub's zip copied over it. Run the installer again if you move the folder.
 
 To publish an update, raise `version` in `manifest.json` and `package.json` and push.
 
