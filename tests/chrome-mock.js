@@ -298,6 +298,12 @@ export function installChromeMock({ tabs = [], storage = {} } = {}) {
         return Promise.resolve();
       },
       reload: (id) => (tabState.has(Number(id)) ? Promise.resolve() : Promise.reject(new Error("No tab"))),
+      discard: (id) => {
+        const tab = tabState.get(Number(id));
+        if (!tab) return Promise.reject(new Error("No tab"));
+        tab.discarded = true;
+        return Promise.resolve({ id: Number(id), ...tab });
+      },
       group: (options) => groupTabs(options),
       sendMessage: (id, message) => {
         const handler = messageHandlers.get(Number(id));
