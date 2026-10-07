@@ -226,6 +226,11 @@
 
   let qualityObserver = null;
   let lastLurkQualityHuntAt = 0;
+  // When this tab last came in front. For a short while after, media events
+  // retry the viewing quality, because the player controls are often not drawn
+  // yet at the moment the tab appears.
+  let viewingSince = 0;
+  const VIEW_RETRY_MS = 30_000;
 
   function optionProfile(option) {
     const text = String(option.textContent || "").toLowerCase();
@@ -342,6 +347,10 @@
 
     let openedSettings = false;
     let openedQuality = false;
+    const startedAt = Date.now();
+    // A tab in front waits for the gear to be drawn. A hidden one gives up at
+    // once, as before, and the next probe tries again.
+    const waitForGear = mode !== "low";
 
     const stop = (dismiss = true) => {
       stopQualityHunt();
@@ -413,7 +422,12 @@
       // A hunt that never sees the menu used to watch every chat message for
       // the rest of the stream. A few seconds of mutations is enough for the
       // gear to render; the next probe retries if the picture is still wrong.
-      if (callbacks > 400) {
+      // A tab in front is bounded by time instead, since a busy chat can use
+      // up the count before the player controls exist.
+      const expired = waitForGear
+        ? Date.now() - startedAt > VIEW_RETRY_MS
+        : callbacks > 400;
+      if (expired) {
         stop(openedSettings || openedQuality);
         return;
       }
@@ -426,7 +440,7 @@
     const start = () => {
       advance();
       if (!qualityObserver) return;
-      if (!openedSettings && !openedQuality) {
+      if (!openedSettings && !openedQuality && !waitForGear) {
         stopQualityHunt();
         return;
       }
@@ -487,6 +501,7 @@
   // while the tab is visible, where timers are not throttled.
   function restoreHighQuality(allowHidden = false) {
     if (!looking() && !allowHidden) return;
+    if (looking()) viewingSince = Date.now();
     // The main-world quality guard has to unlock before this isolated-world
     // script writes the user's preference back.
     window.dispatchEvent(
@@ -504,6 +519,23 @@
 
   function restoreQualityForViewing() {
     restoreHighQuality(false);
+  }
+
+  // Shortly after the tab comes in front, a player that starts or changes size
+  // while still below the viewing quality gets another try.
+  function retryViewingQuality() {
+    if (!managedTab || !looking() || !viewingSince) return;
+    if (Date.now() - viewingSince > VIEW_RETRY_MS) return;
+    if (qualityObserver || alreadyAtQuality(watchingQuality)) return;
+    selectPlayerQuality(watchingQuality, keepHighQualityWhileHidden ? "high" : "view");
+  }
+
+  // A quality the user picks themselves stands.
+  function noteUserQualityPick(event) {
+    if (!managedTab || !event.isTrusted) return;
+    if (event.target?.closest?.('[data-a-target="player-settings-submenu-quality-option"]')) {
+      viewingSince = 0;
+    }
   }
 
   // ---------------------------------------------------------------------
@@ -771,6 +803,9 @@
     document.addEventListener("loadedmetadata", onPlayerAppeared, capture);
     document.addEventListener("canplay", onPlayerAppeared, capture);
     document.addEventListener("playing", onPlaying, capture);
+    document.addEventListener("playing", retryViewingQuality, capture);
+    document.addEventListener("resize", retryViewingQuality, capture);
+    document.addEventListener("click", noteUserQualityPick, capture);
     document.addEventListener("timeupdate", onTimeUpdate, capture);
     document.addEventListener("pause", onPause, capture);
     document.addEventListener("waiting", onStalled, capture);

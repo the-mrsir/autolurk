@@ -310,6 +310,116 @@ describe("player behavior inside a Twitch page", () => {
     assert.equal(expanded, false, "the settings menu was left open");
   });
 
+  it("waits for the player gear when a lurk tab is brought in front", async () => {
+    const source = await readFile(new URL("content/twitch-player.js", root), "utf8");
+    const listeners = [];
+    const observers = [];
+    const { Storage, localStorage } = storage();
+    let gearDrawn = false;
+    let menuOpen = false;
+    let selected1080 = false;
+    const settingsBtn = {
+      getAttribute: (name) => (name === "aria-expanded" ? String(menuOpen) : ""),
+      click: () => {
+        menuOpen = !menuOpen;
+      },
+    };
+    const stream = {
+      paused: false,
+      currentTime: 8,
+      readyState: 4,
+      networkState: 2,
+      videoWidth: 284,
+      videoHeight: 160,
+      volume: 0.5,
+      muted: false,
+      src: "",
+      currentSrc: "",
+      className: "",
+      clientWidth: 284,
+      clientHeight: 160,
+      hasAttribute: () => false,
+      setAttribute: () => {},
+      getBoundingClientRect: () => ({ width: 284, height: 160 }),
+      closest: () => null,
+      play: async () => {},
+    };
+    const container = { querySelectorAll: () => [stream] };
+    const context = {
+      Storage,
+      localStorage,
+      MutationObserver: class {
+        constructor(callback) {
+          this.callback = callback;
+          observers.push(this);
+        }
+        observe() {
+          this.watching = true;
+        }
+        disconnect() {
+          this.watching = false;
+        }
+      },
+      location: { pathname: "/streamer", hash: "#autolurk" },
+      document: {
+        documentElement: {},
+        visibilityState: "visible",
+        querySelectorAll: (selector) => {
+          if (selector === '[data-a-player-type="site"]') return [container];
+          if (selector.includes("player-settings-submenu-quality-option") && menuOpen) {
+            return [
+              {
+                textContent: "1080p60 (Source)",
+                querySelector: () => ({ click: () => (selected1080 = true) }),
+              },
+            ];
+          }
+          return [];
+        },
+        querySelector: (selector) => {
+          if (selector.includes("player-settings-button")) return gearDrawn ? settingsBtn : null;
+          if (selector.includes("player-settings-menu")) return menuOpen ? {} : null;
+          return null;
+        },
+        addEventListener: () => {},
+        removeEventListener: () => {},
+      },
+      getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }),
+      CustomEvent: class {
+        constructor(type, init) {
+          this.type = type;
+          this.detail = init?.detail;
+        }
+      },
+      window: { dispatchEvent: () => {} },
+      chrome: {
+        runtime: {
+          lastError: null,
+          onMessage: { addListener: (listener) => listeners.push(listener) },
+          sendMessage: (_message, callback) => callback?.({ result: true }),
+        },
+      },
+      globalThis: null,
+    };
+    context.globalThis = context;
+    context.__autoLurk = { extractChannel: () => "streamer", send: () => {} };
+
+    vm.runInNewContext(source, context);
+    listeners[0]({ type: "PIN_VIEWING_QUALITY" }, {}, () => {});
+    assert.equal(selected1080, false);
+
+    const hunt = observers.filter((observer) => observer.watching).at(-1);
+    assert.ok(hunt, "the quality change gave up before the gear was drawn");
+
+    gearDrawn = true;
+    const playerNode = { closest: () => ({}) };
+    hunt.callback([{ target: playerNode, addedNodes: [] }]);
+    hunt.callback([{ target: playerNode, addedNodes: [] }]);
+    hunt.callback([{ target: playerNode, addedNodes: [] }]);
+
+    assert.ok(selected1080, "1080p was not selected once the gear appeared");
+  });
+
   it("does not reopen the settings menu when the picture is already right", async () => {
     const source = await readFile(new URL("content/twitch-player.js", root), "utf8");
     const listeners = [];

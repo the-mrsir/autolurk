@@ -777,6 +777,20 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     await wakeManagedTab(activeInfo.tabId);
     const [managed, settings] = await Promise.all([getManagedTabs(), getSettings()]);
+    // The tab the user just clicked comes first and does not wait on the
+    // others. A frozen background tab can take minutes to answer a message.
+    if (!isBootstrapActivation(activeInfo.tabId)) {
+      const activeEntry = managed[String(activeInfo.tabId)];
+      chrome.tabs
+        .sendMessage(
+          activeInfo.tabId,
+          qualityMessage(
+            activeEntry?.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_VIEWING_QUALITY,
+            settings
+          )
+        )
+        .catch(() => {});
+    }
     const others = await Promise.all(
       Object.values(managed)
         .filter((entry) => Number(entry.tabId) !== Number(activeInfo.tabId))
@@ -785,28 +799,13 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
           tab: await chrome.tabs.get(Number(entry.tabId)).catch(() => null),
         }))
     );
-    await Promise.all(
-      others
-        .filter(({ tab }) => tab && !tab.active)
-        .map(({ entry, tab }) =>
-          chrome.tabs
-            .sendMessage(
-              Number(tab.id),
-              qualityMessage(
-                entry.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_LOW_QUALITY,
-                settings
-              )
-            )
-            .catch(() => {})
-        )
-    );
-    if (!isBootstrapActivation(activeInfo.tabId)) {
-      const activeEntry = managed[String(activeInfo.tabId)];
-      await chrome.tabs
+    for (const { entry, tab } of others) {
+      if (!tab || tab.active) continue;
+      chrome.tabs
         .sendMessage(
-          activeInfo.tabId,
+          Number(tab.id),
           qualityMessage(
-            activeEntry?.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_VIEWING_QUALITY,
+            entry.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_LOW_QUALITY,
             settings
           )
         )
