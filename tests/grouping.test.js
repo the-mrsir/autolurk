@@ -1097,6 +1097,18 @@ describe("one AutoLurk group across computers", () => {
     assert.equal(allAutoLurkGroups().length, 0, "a new group was made after yielding");
   });
 
+  it("still gives way after an update wiped session storage", async () => {
+    mock.reset(base);
+    await openTwo();
+    for (const key of Object.keys(mock.session)) delete mock.session[key];
+
+    mock.seedSync({ groupClaim: { machine: "other-computer", at: Date.now() } });
+    const { consolidateIfSplit } = await import("../background/tab-manager.js");
+    await consolidateIfSplit();
+
+    assert.equal(allAutoLurkGroups().length, 0, "both computers kept a group after the update");
+  });
+
   it("makes a group again once the other computer stops holding it", async () => {
     mock.reset(base);
     mock.seedSync({ groupClaim: { machine: "other-computer", at: Date.now() - 10 * 60_000 } });

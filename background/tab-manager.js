@@ -1744,7 +1744,10 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
       } catch {
         return;
       }
-      await setSessionValue(SESSION_KEYS.GROUP, { createdId: groupId });
+      // Session storage is wiped by every extension reload, and an update
+      // that forgot which group it made left both computers keeping theirs.
+      // Group ids last until the browser restarts, which clears this.
+      await mutateMeta((meta) => ({ ...meta, createdGroupId: groupId }));
     }
   }
 
@@ -1851,7 +1854,7 @@ async function noteGroupHeldElsewhere() {
 // group remains. A group this computer joined is the shared one and is kept.
 async function yieldGroupIfHeldElsewhere(groupId) {
   if (groupId == null) return false;
-  const created = (await getSessionValue(SESSION_KEYS.GROUP, {}))?.createdId;
+  const created = (await getMeta()).createdGroupId;
   const madeHere = created != null && Number(created) === Number(groupId);
   if ((await holdGroupClaim()) === "held" || !madeHere) return false;
 
@@ -1863,7 +1866,11 @@ async function yieldGroupIfHeldElsewhere(groupId) {
     return false;
   }
   await setSessionValue(SESSION_KEYS.GROUP, {});
-  await mutateMeta((meta) => (meta.groupId === groupId ? { ...meta, groupId: null } : undefined));
+  await mutateMeta((meta) => {
+    const next = { ...meta, createdGroupId: null };
+    if (meta.groupId === groupId) next.groupId = null;
+    return next;
+  });
   await noteGroupHeldElsewhere();
   return true;
 }

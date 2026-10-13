@@ -123,7 +123,12 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  const pending = initialize({ reset: true, startup: true });
+  // Tab group ids do not survive a browser restart.
+  const pending = mutateMeta((meta) =>
+    meta.createdGroupId != null ? { ...meta, createdGroupId: null } : undefined
+  )
+    .catch(() => {})
+    .then(() => initialize({ reset: true, startup: true }));
   pending.catch((error) => console.warn("Startup init failed", error));
   return pending;
 });
@@ -430,10 +435,15 @@ const PAGE_MESSAGES = new Set([
   MESSAGE.FOCUS_MULTISTREAM,
 ]);
 
+// Startup can take minutes: it opens missing streams one at a time and gives
+// each up to half a minute to play. Waiting all of that out left the
+// dashboard on empty settings for five minutes. Two seconds covers the
+// migrations and the sync pull, and the snapshot saved when startup finishes
+// redraws any open page.
+const STARTUP_WAIT_MS = 2000;
+
 async function handleMessage(message, sender) {
-  // Opening the dashboard used to only read the last snapshot. The launch poll
-  // has to finish first, or the page sits there until Refresh.
-  await startupReady;
+  await Promise.race([startupReady, new Promise((resolve) => setTimeout(resolve, STARTUP_WAIT_MS))]);
   const type = message?.type;
   if (PAGE_MESSAGES.has(type) && !isExtensionPage(sender)) {
     throw new Error("That action is only available from the AutoLurk UI.");
