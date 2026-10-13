@@ -1097,6 +1097,29 @@ describe("one AutoLurk group across computers", () => {
     assert.equal(allAutoLurkGroups().length, 0, "a new group was made after yielding");
   });
 
+  it("leaves merging to the computer holding the group", async () => {
+    mock.reset(base);
+    mock.seedSync({ groupClaim: { machine: "other-computer", at: Date.now() } });
+    await openTwo();
+    const [first, second] = managedTabIds(mock);
+    const groupA = await mock.chrome.tabs.group({ tabIds: [first], createProperties: { windowId: 1 } });
+    await mock.chrome.tabGroups.update(groupA, { title: "AutoLurk · 1" });
+    const groupB = await mock.chrome.tabs.group({ tabIds: [second], createProperties: { windowId: 1 } });
+    await mock.chrome.tabGroups.update(groupB, { title: "AutoLurk · 1" });
+    const writes = [];
+    const update = mock.chrome.tabGroups.update;
+    mock.chrome.tabGroups.update = (...args) => (writes.push(args), update(...args));
+
+    const { consolidateIfSplit } = await import("../background/tab-manager.js");
+    await consolidateIfSplit();
+    await consolidateIfSplit();
+    mock.chrome.tabGroups.update = update;
+
+    assert.equal(mock.tabState.get(first).groupId, groupA, "a tab was moved between synced groups");
+    assert.equal(mock.tabState.get(second).groupId, groupB, "a tab was moved between synced groups");
+    assert.deepEqual(writes, [], "a group was renamed from the computer not holding it");
+  });
+
   it("still gives way after an update wiped session storage", async () => {
     mock.reset(base);
     await openTwo();

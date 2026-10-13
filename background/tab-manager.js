@@ -1635,6 +1635,37 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
   if (!settings.groupTabs) return;
 
+  // Every move between groups, rename and new group is mirrored to the other
+  // computers. Two computers each merging toward their own pick of group trade
+  // tabs back and forth and Brave makes new groups along the way, so only the
+  // computer holding the claim merges, renames or creates. The rest only file
+  // their loose tabs into a group that already exists.
+  if (await groupHeldElsewhere()) {
+    const created = (await getMeta()).createdGroupId;
+    const target =
+      discovered.groups.find((group) => group.id === discovered.canonical?.id && group.id !== created) ||
+      discovered.groups.find((group) => group.id !== created) ||
+      null;
+    if (!target) {
+      if (created != null) await yieldGroupIfHeldElsewhere(created);
+      await noteGroupHeldElsewhere();
+      return;
+    }
+    const loose = tabs.filter((tab) => tab.groupId == null || tab.groupId === -1).map((tab) => tab.id);
+    if (loose.length) {
+      await moveIntoWindow(loose, target.windowId);
+      try {
+        await chrome.tabs.group({ groupId: target.id, tabIds: loose });
+      } catch {
+        // The group closed meanwhile; the next pass looks again.
+      }
+    }
+    if (created != null) await yieldGroupIfHeldElsewhere(created);
+    await remember(target.id);
+    await muteAutoLurkTabs();
+    return;
+  }
+
   // A server is already showing one window. A second AutoLurk group — usually
   // the other computer's, which Chrome only materializes once it is opened —
   // has to fold into that window. Moving the live streams onto the new group
