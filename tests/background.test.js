@@ -16,6 +16,7 @@ const {
   resetHealth,
 } = await import("../background/stream-boot.js");
 const { publishWatching, resetWatchingForTests } = await import("../background/watching.js");
+const { guardMemory } = await import("../background/memory-guard.js");
 const {
   BOOTSTRAP_TIMING,
   closeManagedTab,
@@ -669,6 +670,39 @@ describe("a stream tab closing", () => {
   });
 });
 
+describe("running low on memory", () => {
+  function memory(freeRatio) {
+    mock.chrome.system = {
+      memory: { getInfo: async () => ({ capacity: 1000, availableCapacity: freeRatio * 1000 }) },
+    };
+  }
+
+  it("lets Brave unload background streams, then pins them again once memory is back", async () => {
+    mock.reset({
+      tabs: [
+        { id: 1, url: "https://www.twitch.tv/streamer", active: true, autoDiscardable: false },
+        { id: 2, url: "https://www.twitch.tv/other", active: false, windowId: 1, autoDiscardable: false },
+      ],
+      storage: { managedTabs: { "1": managed(1), "2": managed(2, { login: "other" }) } },
+    });
+    try {
+      memory(0.1);
+      assert.equal(await guardMemory(), true);
+      assert.equal(mock.tabState.get(2).autoDiscardable, true);
+      assert.equal(mock.tabState.get(1).autoDiscardable, false, "the stream in front became unloadable");
+
+      memory(0.2);
+      assert.equal(await guardMemory(), true, "it flipped back before memory really recovered");
+
+      memory(0.4);
+      assert.equal(await guardMemory(), false);
+      assert.equal(mock.tabState.get(2).autoDiscardable, false);
+    } finally {
+      delete mock.chrome.system;
+    }
+  });
+});
+
 describe("a stream someone is watching", () => {
   const old = { openedAt: NOW() - 10 * 60_000 };
 
@@ -995,6 +1029,36 @@ describe("tabs synced inside AutoLurk groups", () => {
     assert.notOk(mock.tabState.has(1), "the offline synced tab stayed open");
     assert.ok(mock.tabState.has(2), "the live synced tab was closed");
     assert.equal((await getManagedTabs())["2"].userId, "2");
+  });
+
+  it("unloads the other computer's streams past the stream limit instead of adopting them", async () => {
+    mock.reset({
+      tabs: [
+        { id: 9, url: "https://example.com", active: true },
+        { id: 1, url: "https://www.twitch.tv/streamer", active: false },
+        { id: 2, url: "https://www.twitch.tv/extra", active: false },
+      ],
+      storage: { managedTabs: { "1": managed(1) } },
+    });
+    const discarded = [];
+    mock.chrome.tabs.discard = async (tabId) => {
+      discarded.push(tabId);
+      mock.tabState.get(tabId).discarded = true;
+    };
+    try {
+      await reconcileGroupedStreams(
+        [{ tab: { tabId: 2, login: "extra" }, channel: { userId: "2", login: "extra", displayName: "Extra" } }],
+        { "2": { userId: "2", login: "extra", streamId: "s2", isLive: true, stale: false } },
+        {},
+        { maxAutoOpenStreams: 1 }
+      );
+    } finally {
+      delete mock.chrome.tabs.discard;
+    }
+
+    assert.deepEqual(discarded, [2]);
+    assert.ok(mock.tabState.has(2), "closing it here would close it on the other computer");
+    assert.equal((await getManagedTabs())["2"], undefined);
   });
 
   it("closes a synced live tab instead of overriding a snooze", async () => {

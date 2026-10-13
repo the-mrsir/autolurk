@@ -150,6 +150,21 @@ export async function reconcileGroupedStreams(
       continue;
     }
     if (streamIsOpenable(stream)) {
+      // Brave opens every tab of the shared group here, so the other
+      // computer's streams count against this computer's memory as well.
+      // Past the stream limit they are unloaded here, which leaves them open
+      // and playing on the other computer.
+      const max = Number(settings.maxAutoOpenStreams) || 0;
+      const managed = await getManagedTabs();
+      if (
+        max > 0 &&
+        !managed[String(tab.tabId)] &&
+        !(await getManagedTabForUser(userId)) &&
+        Object.keys(managed).length >= max
+      ) {
+        await unloadMirroredTab(tab.tabId, channel);
+        continue;
+      }
       await adoptGroupedStreamTab(tab.tabId, channel, stream);
       continue;
     }
@@ -161,6 +176,25 @@ export async function reconcileGroupedStreams(
         { channel: channel.login }
       );
     }
+  }
+}
+
+async function unloadMirroredTab(tabId, channel) {
+  let tab;
+  try {
+    tab = await chrome.tabs.get(Number(tabId));
+  } catch {
+    return;
+  }
+  if (tab.active || tab.discarded || typeof chrome.tabs.discard !== "function") return;
+  try {
+    await chrome.tabs.discard(Number(tabId));
+    await logActivity(
+      `Unloaded ${channel.displayName || channel.login} here; it is over the stream limit and still plays on the other computer`,
+      { channel: channel.login }
+    );
+  } catch {
+    // It closed, or the browser would not unload it this time.
   }
 }
 

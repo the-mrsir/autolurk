@@ -49,6 +49,7 @@ import { rotateServerStreams, rotateServerStreamsIfDue } from "./server-rotation
 import { noteStreakTabClosed, scanWatchStreaks, stopWatchStreaks, tickWatchStreaks } from "./streaks.js";
 import { checkForUpdate } from "./updates.js";
 import { publishWatching } from "./watching.js";
+import { guardMemory } from "./memory-guard.js";
 import {
   addChannelByLogin,
   adoptNavigatedChannel,
@@ -286,6 +287,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
         await buildSnapshot();
         return;
       case ALARMS.HEALTH_CHECK:
+        await guardMemory().catch((error) => console.warn("Memory check failed", error));
         // Group repair must run first. Player probes can take several seconds
         // per tab, while a group synced from another computer should be merged
         // as soon as this alarm fires.

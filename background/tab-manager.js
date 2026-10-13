@@ -19,6 +19,7 @@ import {
 import { streamIsOpenable } from "../shared/poll-logic.js";
 import { logActivity } from "./activity.js";
 import { groupHeldElsewhere, holdGroupClaim, releaseGroupClaim } from "./group-claim.js";
+import { memoryIsLow } from "./memory-guard.js";
 import { watchedStreams } from "./watching.js";
 import {
   clearBootWatch,
@@ -102,11 +103,13 @@ export async function reconcileManagedTabs() {
     return managed;
   });
 
-  for (const tabId of Object.keys(next)) {
-    try {
-      await chrome.tabs.update(Number(tabId), { autoDiscardable: false });
-    } catch {
-      // Tab may already be closing.
+  if (!memoryIsLow()) {
+    for (const tabId of Object.keys(next)) {
+      try {
+        await chrome.tabs.update(Number(tabId), { autoDiscardable: false });
+      } catch {
+        // Tab may already be closing.
+      }
     }
   }
 
@@ -967,7 +970,7 @@ async function bootstrapManagedStream(channel, stream, options, settings, login)
 async function settleNewTab(tabId, settings) {
   try {
     await chrome.tabs.update(tabId, {
-      autoDiscardable: false,
+      autoDiscardable: memoryIsLow(),
       muted: Boolean(settings.muteTabs),
     });
   } catch {
@@ -1036,7 +1039,7 @@ async function adoptTabNow(tab, channel, stream, login) {
   });
 
   try {
-    await chrome.tabs.update(tab.id, { autoDiscardable: false });
+    await chrome.tabs.update(tab.id, { autoDiscardable: memoryIsLow() });
   } catch {
     // Tab may be closing.
   }
