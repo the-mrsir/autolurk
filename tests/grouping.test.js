@@ -804,6 +804,54 @@ describe("the periodic split sweep", () => {
     assert.equal(autoLurkGroups(mock)[0].id, group.id, "the group was needlessly rebuilt");
   });
 
+  it("writes nothing to a group that is already right", async () => {
+    mock.reset(base);
+    await twoStreams();
+    const { updateLiveGroup } = await import("../background/tab-manager.js");
+    const { getManagedTabs } = await import("../shared/storage.js");
+    const original = mock.chrome.tabGroups.update;
+    let writes = 0;
+    mock.chrome.tabGroups.update = (...args) => {
+      writes += 1;
+      return original(...args);
+    };
+    try {
+      await updateLiveGroup(await getManagedTabs());
+      await updateLiveGroup(await getManagedTabs());
+    } finally {
+      mock.chrome.tabGroups.update = original;
+    }
+
+    assert.equal(writes, 0, "each write is a group event here and on the other computer");
+  });
+
+  it("stops repairing a group that keeps changing", async () => {
+    mock.reset(base);
+    await twoStreams();
+    const { GROUP_REPAIR_LIMIT, updateLiveGroup } = await import("../background/tab-manager.js");
+    const { getManagedTabs } = await import("../shared/storage.js");
+    const original = mock.chrome.tabs.query;
+    let queries = 0;
+    mock.chrome.tabs.query = (...args) => {
+      queries += 1;
+      return original(...args);
+    };
+    try {
+      const managedTabs = await getManagedTabs();
+      for (let run = 0; run < GROUP_REPAIR_LIMIT.runs + 20; run += 1) await updateLiveGroup(managedTabs);
+      const before = queries;
+      await updateLiveGroup(managedTabs);
+      assert.equal(queries, before, "a paused repair still ran");
+    } finally {
+      mock.chrome.tabs.query = original;
+    }
+    const { getActivity } = await import("../shared/storage.js");
+    assert.ok(
+      (await getActivity()).some((item) => /paused/.test(item.text || "")),
+      "the pause was not written to the activity log"
+    );
+  });
+
   it("merges a second group that appeared on its own", async () => {
     mock.reset(base);
     await twoStreams();

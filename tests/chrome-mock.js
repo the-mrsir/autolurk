@@ -515,6 +515,8 @@ export function installChromeMock({ tabs = [], storage = {} } = {}) {
     // was global at import time. Tests reset this handle in place instead of
     // installing a second mock.
     reset({ tabs: nextTabs = [], storage: nextStorage = {} } = {}) {
+      // In-memory limits in the background modules count across tests otherwise.
+      for (const resetModule of globalThis.__autoLurkTestResets || []) resetModule();
       for (const key of Object.keys(local)) delete local[key];
       for (const key of Object.keys(session)) delete session[key];
       for (const key of Object.keys(sync)) delete sync[key];

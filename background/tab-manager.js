@@ -1563,11 +1563,35 @@ export async function addTabToLiveGroup(tabId, options = {}) {
 // one. Keep the whole read/move/group/remember sequence in one queue.
 let groupUpdateChain = Promise.resolve();
 
+// Group writes are events, here and on the other computer, and events start
+// group repairs. Whatever turns that into a loop, it must not be able to spin
+// the browser: past this many runs a minute, repairs stop for a minute.
+export const GROUP_REPAIR_LIMIT = { runs: 60, windowMs: 60_000, pauseMs: 60_000 };
+const groupRuns = [];
+let groupPausedUntil = 0;
+
+function groupRepairAllowed(now = Date.now()) {
+  if (now < groupPausedUntil) return false;
+  while (groupRuns.length && now - groupRuns[0] > GROUP_REPAIR_LIMIT.windowMs) groupRuns.shift();
+  groupRuns.push(now);
+  if (groupRuns.length <= GROUP_REPAIR_LIMIT.runs) return true;
+  groupRuns.length = 0;
+  groupPausedUntil = now + GROUP_REPAIR_LIMIT.pauseMs;
+  logActivity(`${GROUP_NAME} group kept changing, so group repair is paused for a minute`, {
+    level: "warn",
+  }).catch(() => {});
+  return false;
+}
+
+export function resetGroupRepairLimit() {
+  groupRuns.length = 0;
+  groupPausedUntil = 0;
+}
+(globalThis.__autoLurkTestResets ||= []).push(resetGroupRepairLimit);
+
 export function updateLiveGroup(managedTabs, options = {}) {
-  const result = groupUpdateChain.then(
-    () => updateLiveGroupNow(managedTabs, options),
-    () => updateLiveGroupNow(managedTabs, options)
-  );
+  const run = () => (groupRepairAllowed() ? updateLiveGroupNow(managedTabs, options) : undefined);
+  const result = groupUpdateChain.then(run, run);
   groupUpdateChain = result.then(
     () => {},
     () => {}
@@ -1729,20 +1753,25 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
 
   try {
-    await chrome.tabGroups.update(groupId, {
-      title: `${GROUP_NAME} · ${count}`,
-      // An unrecognised colour makes Chrome reject the whole call, taking the
-      // title with it and leaving the group anonymous.
-      color: GROUP_COLORS.has(settings.groupColor) ? settings.groupColor : "purple",
-    });
+    // Every write here is an onUpdated event in this browser, and Brave sends
+    // it to the other computer as one too. Only write what actually changed.
+    const current = await chrome.tabGroups.get(groupId);
+    const title = `${GROUP_NAME} · ${count}`;
+    // An unrecognised colour makes Chrome reject the whole call, taking the
+    // title with it and leaving the group anonymous.
+    const color = GROUP_COLORS.has(settings.groupColor) ? settings.groupColor : "purple";
+    const change = {};
+    if (current?.title !== title) change.title = title;
+    if (current?.color !== color) change.color = color;
     // Only collapse when a tab was just added in the background, otherwise the
     // periodic refresh keeps folding a group the user expanded.
     if (settings.serverRotation) {
-      await chrome.tabGroups.update(groupId, { collapsed: false });
-    } else if (settings.collapseGroup && options.collapseNow === true) {
+      if (current?.collapsed) change.collapsed = false;
+    } else if (settings.collapseGroup && options.collapseNow === true && !current?.collapsed) {
       const active = await chrome.tabs.query({ groupId, active: true });
-      if (active.length === 0) await chrome.tabGroups.update(groupId, { collapsed: true });
+      if (active.length === 0) change.collapsed = true;
     }
+    if (Object.keys(change).length) await chrome.tabGroups.update(groupId, change);
   } catch {
     // Renaming and recolouring are cosmetic. Forgetting a group that is still
     // there is not: the next stream then fails to find it and starts another,
@@ -1773,21 +1802,25 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   if (keepInFront != null) {
     try {
       const tab = await chrome.tabs.get(keepInFront);
-      await chrome.tabs.update(keepInFront, { active: true, autoDiscardable: false });
+      if (!tab.active) await chrome.tabs.update(keepInFront, { active: true, autoDiscardable: false });
       if (tab.windowId != null) {
-        const update = { focused: true };
         try {
           const win = await chrome.windows.get(tab.windowId);
-          if (win?.state === "minimized") update.state = "normal";
+          if (win?.state === "minimized" || !win?.focused) {
+            await chrome.windows.update(
+              tab.windowId,
+              win?.state === "minimized" ? { focused: true, state: "normal" } : { focused: true }
+            );
+          }
         } catch {
-          // The window is still there enough to focus.
+          // The window closed during the merge.
         }
-        await chrome.windows.update(tab.windowId, update);
       }
       try {
-        await chrome.tabGroups.update(tab.groupId, { collapsed: false });
+        const group = await chrome.tabGroups.get(tab.groupId);
+        if (group?.collapsed) await chrome.tabGroups.update(tab.groupId, { collapsed: false });
       } catch {
-        // Already expanded with the group update above.
+        // Not in a group, or already expanded with the group update above.
       }
     } catch {
       // The stream closed during the merge.

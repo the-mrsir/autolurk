@@ -610,10 +610,15 @@ async function handleMessage(message, sender) {
     }
     case MESSAGE.PLAYER_BOOT: {
       if (!sender.tab?.id) return false;
+      const before = (await getManagedTabs())[String(sender.tab.id)]?.health;
       const entry = await handlePlayerBoot(sender.tab.id, message);
-      // The group title carries the managed count, so refresh it once a tab
-      // actually reaches playback rather than on every boot stage.
-      if (entry?.health === HEALTH.MEDIA_PLAYING) await updateLiveGroup(await getManagedTabs());
+      // The group title carries the managed count, so refresh it when a tab
+      // first reaches playback. "playing" also fires on every quality change
+      // and after every ad, and a group pass for each of those is a burst of
+      // group events in this browser and on the other computer.
+      if (entry?.health === HEALTH.MEDIA_PLAYING && before !== HEALTH.MEDIA_PLAYING) {
+        await updateLiveGroup(await getManagedTabs());
+      }
       await buildSnapshot();
       return true;
     }
@@ -733,6 +738,9 @@ async function openDashboard(hash = "") {
 // ---------------------------------------------------------------------------
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  // This fires for every title, favicon, sound and group change of every tab
+  // in the browser. Only mute, navigation and load changes concern AutoLurk.
+  if (!changeInfo.mutedInfo && !changeInfo.url && !changeInfo.status) return;
   try {
     if (changeInfo.mutedInfo) {
       const muted = Boolean(changeInfo.mutedInfo.muted);
@@ -774,6 +782,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   }
 });
 
+const lastActiveByWindow = new Map();
+
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   try {
     await wakeManagedTab(activeInfo.tabId);
@@ -793,23 +803,18 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         .catch(() => {});
     }
     publishWatching(managed).catch(() => {});
-    const others = await Promise.all(
-      Object.values(managed)
-        .filter((entry) => Number(entry.tabId) !== Number(activeInfo.tabId))
-        .map(async (entry) => ({
-          entry,
-          tab: await chrome.tabs.get(Number(entry.tabId)).catch(() => null),
-        }))
-    );
-    for (const { entry, tab } of others) {
-      if (!tab || tab.active) continue;
+    // Only the tab that just went behind changed. Messaging every lurk tab on
+    // each click set all of them hunting through Twitch's quality menu at once.
+    // The page also lowers itself when it is hidden, and the minute probe
+    // catches anything both of those missed.
+    const previous = lastActiveByWindow.get(activeInfo.windowId);
+    lastActiveByWindow.set(activeInfo.windowId, activeInfo.tabId);
+    const left = previous != null && previous !== activeInfo.tabId ? managed[String(previous)] : null;
+    if (left) {
       chrome.tabs
         .sendMessage(
-          Number(tab.id),
-          qualityMessage(
-            entry.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_LOW_QUALITY,
-            settings
-          )
+          Number(previous),
+          qualityMessage(left.userUnmuted ? MESSAGE.PIN_HIGH_QUALITY : MESSAGE.PIN_LOW_QUALITY, settings)
         )
         .catch(() => {});
     }
@@ -831,6 +836,7 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
 });
 
 chrome.tabGroups.onRemoved.addListener(async (group) => {
+  knownAutoLurkGroups.delete(group.id);
   try {
     await mutateMeta((meta) =>
       meta.groupId === group.id ? { ...meta, groupId: null } : undefined
@@ -840,20 +846,40 @@ chrome.tabGroups.onRemoved.addListener(async (group) => {
   }
 });
 
-async function reconcileNamedAutoLurkGroup(group) {
-  if (!String(group?.title || "").startsWith(GROUP_NAME)) return;
-  try {
-    await consolidateIfSplit();
-    await muteAutoLurkTabs();
-  } catch (error) {
-    console.warn("Synced tab group reconciliation failed", error);
+// Group ids already known to be AutoLurk's. A collapse, an expand, or a new
+// count in the title is an update to a known group and needs no repair; only
+// a group that just became AutoLurk's does. The minute alarm covers the rest.
+const knownAutoLurkGroups = new Set();
+let groupRepairTimer = null;
+
+function scheduleGroupRepair() {
+  if (groupRepairTimer) return;
+  // Sync delivers a group as a burst of events. One repair after it settles.
+  groupRepairTimer = setTimeout(async () => {
+    groupRepairTimer = null;
+    try {
+      await consolidateIfSplit();
+      await muteAutoLurkTabs();
+    } catch (error) {
+      console.warn("Synced tab group reconciliation failed", error);
+    }
+  }, 1500);
+}
+
+function noteAutoLurkGroup(group) {
+  if (!String(group?.title || "").startsWith(GROUP_NAME)) {
+    knownAutoLurkGroups.delete(group?.id);
+    return;
   }
+  if (knownAutoLurkGroups.has(group.id)) return;
+  knownAutoLurkGroups.add(group.id);
+  scheduleGroupRepair();
 }
 
 // Chrome tab-group sync can materialize the other computer's AutoLurk group
-// at any time. Merge it immediately instead of waiting for a stream event.
-chrome.tabGroups.onCreated.addListener(reconcileNamedAutoLurkGroup);
-chrome.tabGroups.onUpdated.addListener(reconcileNamedAutoLurkGroup);
+// at any time. Merge it soon instead of waiting for a stream event.
+chrome.tabGroups.onCreated.addListener(noteAutoLurkGroup);
+chrome.tabGroups.onUpdated.addListener(noteAutoLurkGroup);
 
 // ---------------------------------------------------------------------------
 // Sync from the user's other computers

@@ -417,7 +417,8 @@
           )
       );
     let callbacks = 0;
-    qualityObserver = new MutationObserver((records) => {
+    let framePending = false;
+    const observer = new MutationObserver((records) => {
       callbacks += 1;
       // A hunt that never sees the menu used to watch every chat message for
       // the rest of the stream. A few seconds of mutations is enough for the
@@ -431,12 +432,25 @@
         stop(openedSettings || openedQuality);
         return;
       }
+      // In front, a busy chat adds thousands of nodes a second, and testing
+      // each one against the player selectors is real work in the tab being
+      // watched. One look per frame costs a few attribute lookups.
+      if (looking() && typeof requestAnimationFrame === "function") {
+        if (framePending) return;
+        framePending = true;
+        requestAnimationFrame(() => {
+          framePending = false;
+          if (qualityObserver === observer) advance();
+        });
+        return;
+      }
       const relevant = records.some((record) => {
         if (playerUi(record.target)) return true;
         return [...(record.addedNodes || [])].some((node) => playerUi(node));
       });
       if (relevant) advance();
     });
+    qualityObserver = observer;
     const start = () => {
       advance();
       if (!qualityObserver) return;
