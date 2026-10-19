@@ -56,6 +56,7 @@ import {
   resetActiveComputer,
   runHere,
   runsHere,
+  standByHere,
   standingBy,
   whenRoleChanges,
 } from "./active-computer.js";
@@ -455,6 +456,7 @@ const PAGE_MESSAGES = new Set([
   MESSAGE.IMPORT_DATA,
   MESSAGE.CHECK_UPDATE,
   MESSAGE.RUN_HERE,
+  MESSAGE.STAND_BY_HERE,
   MESSAGE.WATCHDOG_GET,
   MESSAGE.WATCHDOG_SAVE,
   MESSAGE.START_MULTISTREAM,
@@ -610,6 +612,9 @@ async function handleMessage(message, sender) {
       return checkForUpdate(message.url);
     case MESSAGE.RUN_HERE:
       await runHere();
+      return buildSnapshot();
+    case MESSAGE.STAND_BY_HERE:
+      await standByHere();
       return buildSnapshot();
     case MESSAGE.IMPORT_DATA: {
       const result = await importData(message.payload);

@@ -28,7 +28,7 @@ Each computer makes its own sync code, shown under **Settings → Your other com
 
 Both computers have to show the same extension ID on that page. Do not change or remove the `key` in `manifest.json`.
 
-AutoLurk runs on one of those computers at a time. The others leave every tab alone and show **Run here** on the dashboard. If the running computer is off for 10 minutes, the next one takes over.
+AutoLurk runs on one of those computers at a time. The others leave every tab alone and show **Run here** on the dashboard. If the running computer is off for 10 minutes, the next one takes over. **Stand by here** keeps a computer out of it until you click **Run here** on it.
 
 **Export backup** and **Import backup** move favorites and settings in a file. The Twitch login is left out.
 

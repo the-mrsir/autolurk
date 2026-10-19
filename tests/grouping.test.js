@@ -1168,6 +1168,30 @@ describe("one computer running AutoLurk", () => {
     assert.equal((await activeComputerState()).outdated, true);
   });
 
+  it("stays on stand by when told to, even with nothing in sync", async () => {
+    mock.reset(base);
+    await openTwo();
+    const { resetActiveComputer, runHere, runsHere, standByHere, activeComputerState } = await import(
+      "../background/active-computer.js"
+    );
+    resetActiveComputer();
+    const tabsBefore = mock.tabState.size;
+
+    await standByHere();
+    resetActiveComputer();
+
+    assert.equal(await runsHere(), false);
+    assert.equal("activeComputer" in mock.sync, false, "standing by left a claim in sync");
+    assert.equal((await activeComputerState()).chosen, true);
+    const { consolidateIfSplit } = await import("../background/tab-manager.js");
+    assert.equal(await consolidateIfSplit(), false);
+    assert.equal(mock.tabState.size, tabsBefore, "a tab was opened or closed while standing by");
+
+    await runHere();
+    resetActiveComputer();
+    assert.equal(await runsHere(), true);
+  });
+
   it("takes over once the other computer goes quiet", async () => {
     mock.reset(base);
     mock.seedSync({ activeComputer: { machine: "other-computer", at: Date.now() - 20 * 60_000 } });

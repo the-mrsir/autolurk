@@ -394,11 +394,21 @@ function renderBanners(snap) {
     });
   }
 
-  if (snap.activeComputer && !snap.activeComputer.here) {
+  // Always shown, so each computer can be checked at a glance.
+  const role = snap.activeComputer;
+  if (role && !role.here) {
     banners.push({
       tone: "info",
-      text: `AutoLurk is running on ${snap.activeComputer.name || "another computer"}. This computer leaves every tab alone.`,
+      text: role.chosen
+        ? "This computer is set to stand by. It leaves every tab alone."
+        : `AutoLurk is running on ${role.name || "another computer"}. This computer leaves every tab alone.`,
       action: { id: "run-here", label: "Run here" },
+    });
+  } else if (role) {
+    banners.push({
+      tone: "info",
+      text: "AutoLurk is running on this computer.",
+      action: { id: "stand-by-here", label: "Stand by here" },
     });
   }
 
@@ -426,13 +436,13 @@ function renderBanners(snap) {
 $("banners").addEventListener("click", async (event) => {
   const button = event.target.closest("[data-banner-action]");
   if (!button) return;
-  if (button.dataset.bannerAction === "run-here") {
-    button.disabled = true;
-    try {
-      await send(MESSAGE.RUN_HERE);
-    } finally {
-      await refresh();
-    }
+  const type = { "run-here": MESSAGE.RUN_HERE, "stand-by-here": MESSAGE.STAND_BY_HERE }[button.dataset.bannerAction];
+  if (!type) return;
+  button.disabled = true;
+  try {
+    await send(type);
+  } finally {
+    await refresh();
   }
 });
 

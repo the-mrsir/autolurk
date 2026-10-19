@@ -71,7 +71,14 @@ export async function runsHere(now = Date.now()) {
   return here;
 }
 
+// Kept in local storage, so it holds even when sync never reaches the other
+// computer.
+async function chosenStandby() {
+  return (await getMeta()).computerRole === "standby";
+}
+
 async function checkRole(now) {
+  if (await chosenStandby()) return noteRole(false, { chosen: true });
   if (!(await shared())) return noteRole(true);
   const me = await machineId();
   const claim = await readClaim();
@@ -88,9 +95,21 @@ export async function standingBy() {
 
 export async function runHere(now = Date.now()) {
   cached = { at: now, here: true };
-  if (!(await shared())) return true;
-  await writeClaim(await machineId(), now);
+  await mutateMeta((meta) => (meta.computerRole ? { ...meta, computerRole: "" } : undefined));
+  if (await shared()) await writeClaim(await machineId(), now);
   await noteRole(true);
+  return true;
+}
+
+export async function standByHere(now = Date.now()) {
+  cached = { at: now, here: false };
+  await mutateMeta((meta) => ({ ...meta, computerRole: "standby" }));
+  if (await shared()) {
+    const me = await machineId();
+    const claim = await readClaim();
+    if (claim?.machine === me) await syncArea().remove(ACTIVE_COMPUTER_KEY).catch(() => {});
+  }
+  await noteRole(false, { chosen: true });
   return true;
 }
 
@@ -100,6 +119,7 @@ export function resetActiveComputer() {
 (globalThis.__autoLurkTestResets ||= []).push(resetActiveComputer);
 
 export async function activeComputerState(now = Date.now()) {
+  if (await chosenStandby()) return { here: false, name: "", chosen: true, outdated: false };
   if (!(await shared())) return { here: true, name: "" };
   const claim = await readClaim();
   const me = await machineId();
@@ -139,7 +159,9 @@ async function noteRole(here, claim = null) {
   await logActivity(
     here
       ? "AutoLurk is running on this computer."
-      : `AutoLurk is running on ${claim?.name || "another computer"}. This computer is standing by.`
+      : claim?.chosen
+        ? "This computer is set to stand by. It leaves every tab alone."
+        : `AutoLurk is running on ${claim?.name || "another computer"}. This computer is standing by.`
   );
   // Not awaited: the handler polls and reconciles, and those queues may be
   // the very caller asking for the role.
