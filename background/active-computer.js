@@ -103,10 +103,23 @@ export async function activeComputerState(now = Date.now()) {
   if (!(await shared())) return { here: true, name: "" };
   const claim = await readClaim();
   const me = await machineId();
+  const outdated = await outdatedComputerRunning(me, now);
   if (isFresh(claim, now) && claim.machine !== me) {
-    return { here: false, name: claim.name || "Another computer", at: Number(claim.at) || 0 };
+    return { here: false, name: claim.name || "Another computer", at: Number(claim.at) || 0, outdated };
   }
-  return { here: true, name: "" };
+  return { here: true, name: "", outdated };
+}
+
+// Versions before 1.2.55 do not know about taking turns and keep refreshing
+// the old group claim. One that is still running makes its own group beside
+// this computer's until it is updated.
+async function outdatedComputerRunning(me, now) {
+  try {
+    const old = (await syncArea().get("groupClaim"))?.groupClaim;
+    return Boolean(old?.machine) && old.machine !== me && now - Number(old.at || 0) < 5 * 60_000;
+  } catch {
+    return false;
+  }
 }
 
 // Logs the change of role once, and hands the change to whoever registered

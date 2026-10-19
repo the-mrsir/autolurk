@@ -387,6 +387,13 @@ function renderBanners(snap) {
     banners.push({ tone: "info", text: "AutoLurk is paused. Nothing will open or close automatically." });
   }
 
+  if (snap.activeComputer?.outdated) {
+    banners.push({
+      tone: "warn",
+      text: "Another computer is still running an older AutoLurk, and it makes its own group. Click Update now on that computer.",
+    });
+  }
+
   if (snap.activeComputer && !snap.activeComputer.here) {
     banners.push({
       tone: "info",

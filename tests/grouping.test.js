@@ -881,6 +881,48 @@ describe("the periodic split sweep", () => {
     );
   });
 
+  it("leaves one group when a pass that ran out of time finishes late", async () => {
+    mock.reset(base);
+    const { GROUP_UPDATE_LIMIT, updateLiveGroup } = await import("../background/tab-manager.js");
+    const { getManagedTabs } = await import("../shared/storage.js");
+    await twoStreams();
+    for (const tab of mock.tabState.values()) tab.groupId = -1;
+    mock.groupState.clear();
+    mock.local.meta = { ...(mock.local.meta || {}), groupId: null };
+    assert.equal(autoLurkGroups(mock).length, 0, "setup should start with no group");
+
+    // The first pass's call to make a group hangs in the browser until after
+    // the next pass has already made one.
+    const original = mock.chrome.tabs.group;
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let held = false;
+    mock.chrome.tabs.group = async (props) => {
+      if (props?.createProperties && !held) {
+        held = true;
+        await gate;
+      }
+      return original(props);
+    };
+    const limit = GROUP_UPDATE_LIMIT.ms;
+    GROUP_UPDATE_LIMIT.ms = 30;
+    try {
+      await updateLiveGroup(await getManagedTabs());
+      GROUP_UPDATE_LIMIT.ms = limit;
+      await updateLiveGroup(await getManagedTabs());
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    } finally {
+      GROUP_UPDATE_LIMIT.ms = limit;
+      mock.chrome.tabs.group = original;
+    }
+    await updateLiveGroup(await getManagedTabs());
+
+    assert.equal(autoLurkGroups(mock).length, 1, `${autoLurkGroups(mock).length} groups after a slow pass`);
+  });
+
   it("merges a second group that appeared on its own", async () => {
     mock.reset(base);
     await twoStreams();
@@ -1107,12 +1149,23 @@ describe("one computer running AutoLurk", () => {
       here: false,
       name: "Linux computer",
       at: mock.sync.activeComputer.at,
+      outdated: false,
     });
     const { getActivity } = await import("../shared/storage.js");
     assert.ok(
       (await getActivity()).some((item) => item.text.includes("This computer is standing by")),
       "standing by was not written down"
     );
+  });
+
+  it("points out a computer still running a version from before taking turns", async () => {
+    mock.reset(base);
+    const { activeComputerState } = await import("../background/active-computer.js");
+    assert.equal((await activeComputerState()).outdated, false);
+
+    mock.seedSync({ groupClaim: { machine: "other-computer", at: Date.now() } });
+
+    assert.equal((await activeComputerState()).outdated, true);
   });
 
   it("takes over once the other computer goes quiet", async () => {

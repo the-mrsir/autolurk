@@ -1604,18 +1604,30 @@ export function resetGroupRepairLimit() {
 }
 (globalThis.__autoLurkTestResets ||= []).push(resetGroupRepairLimit);
 
-export const GROUP_UPDATE_LIMIT = { ms: 30_000 };
+// A slow browser can take a while to move a dozen tabs, so this is generous.
+export const GROUP_UPDATE_LIMIT = { ms: 2 * 60_000 };
+
+class GroupPassAbandoned extends Error {}
+
+// A pass that ran out of time may still be running when the next one starts.
+// Two passes at once is how a profile ends up with several groups, so the old
+// one stops before its next change to any tab or group.
+function startGroupPass(managedTabs, options) {
+  const pass = { abandoned: false };
+  const work = updateLiveGroupNow(managedTabs, options, pass);
+  work.catch(() => {});
+  return withTimeout(work, GROUP_UPDATE_LIMIT.ms, "Tab group repair").catch((error) => {
+    if (error instanceof TimeoutError) {
+      pass.abandoned = true;
+      return logStuck("Tab group repair");
+    }
+    if (error instanceof GroupPassAbandoned) return undefined;
+    throw error;
+  });
+}
 
 export function updateLiveGroup(managedTabs, options = {}) {
-  const run = () =>
-    groupRepairAllowed()
-      ? withTimeout(updateLiveGroupNow(managedTabs, options), GROUP_UPDATE_LIMIT.ms, "Tab group repair").catch(
-          (error) => {
-            if (error instanceof TimeoutError) return logStuck("Tab group repair");
-            throw error;
-          }
-        )
-      : undefined;
+  const run = () => (groupRepairAllowed() ? startGroupPass(managedTabs, options) : undefined);
   const result = groupUpdateChain.then(run, run);
   groupUpdateChain = result.then(
     () => {},
@@ -1624,10 +1636,15 @@ export function updateLiveGroup(managedTabs, options = {}) {
   return result;
 }
 
-async function updateLiveGroupNow(managedTabs, options = {}) {
+async function updateLiveGroupNow(managedTabs, options = {}, pass = { abandoned: false }) {
+  const stillCurrent = () => {
+    if (pass.abandoned) throw new GroupPassAbandoned();
+  };
   // One tab per channel, including copies sitting in a group Chrome opened
   // from another computer.
-  if (await closeDuplicateStreamTabs(await chrome.tabs.query({}))) {
+  const tabsNow = await chrome.tabs.query({});
+  stillCurrent();
+  if (await closeDuplicateStreamTabs(tabsNow)) {
     managedTabs = await getManagedTabs();
   }
 
@@ -1657,37 +1674,6 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   }
   if (!settings.groupTabs) return;
 
-  // Every move between groups, rename and new group is mirrored to the other
-  // computers. Two computers each merging toward their own pick of group trade
-  // tabs back and forth and Brave makes new groups along the way, so only the
-  // computer holding the claim merges, renames or creates. The rest only file
-  // their loose tabs into a group that already exists.
-  if (await groupHeldElsewhere()) {
-    const created = (await getMeta()).createdGroupId;
-    const target =
-      discovered.groups.find((group) => group.id === discovered.canonical?.id && group.id !== created) ||
-      discovered.groups.find((group) => group.id !== created) ||
-      null;
-    if (!target) {
-      if (created != null) await yieldGroupIfHeldElsewhere(created);
-      await noteGroupHeldElsewhere();
-      return;
-    }
-    const loose = tabs.filter((tab) => tab.groupId == null || tab.groupId === -1).map((tab) => tab.id);
-    if (loose.length) {
-      await moveIntoWindow(loose, target.windowId);
-      try {
-        await chrome.tabs.group({ groupId: target.id, tabIds: loose });
-      } catch {
-        // The group closed meanwhile; the next pass looks again.
-      }
-    }
-    if (created != null) await yieldGroupIfHeldElsewhere(created);
-    await remember(target.id);
-    await muteAutoLurkTabs();
-    return;
-  }
-
   // A server is already showing one window. A second AutoLurk group — usually
   // the other computer's, which Chrome only materializes once it is opened —
   // has to fold into that window. Moving the live streams onto the new group
@@ -1707,6 +1693,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
 
   // One window first, then one group. Grouping before the moves would only
   // create a group in a window the tabs are about to leave.
+  stillCurrent();
   await moveIntoWindow(
     tabs.filter((tab) => tab.windowId !== home).map((tab) => tab.id),
     home
@@ -1730,6 +1717,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   // A collapsed group Chrome just synced does not give up its tabs until it
   // is open. Open it in place, then pull the tabs across, without sending the
   // window the server is using to the back.
+  stillCurrent();
   if (settings.serverRotation) {
     for (const strayId of strays) {
       try {
@@ -1740,6 +1728,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     }
   }
   const reclaimed = await tabsInGroups(strays);
+  stillCurrent();
   await moveIntoWindow(reclaimed, home);
 
   const wanted = [...new Set([...tabs.map((tab) => tab.id), ...reclaimed])];
@@ -1748,6 +1737,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     return;
   }
 
+  stillCurrent();
   if (groupId != null) {
     try {
       await chrome.tabs.group({ groupId, tabIds: wanted });
@@ -1773,6 +1763,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     const existing = settings.serverRotation
       ? again.groups.find((group) => group.windowId === home) || null
       : again.canonical;
+    stillCurrent();
     if (existing) {
       groupId = existing.id;
       try {
@@ -1792,6 +1783,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
         await noteGroupHeldElsewhere();
         return;
       }
+      stillCurrent();
       try {
         groupId = await chrome.tabs.group({ tabIds: wanted, createProperties: { windowId: home } });
       } catch {
@@ -1810,6 +1802,7 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
   } catch {
     // Fall back to what we asked for.
   }
+  stillCurrent();
 
   try {
     // Every write here is an onUpdated event in this browser, and Brave sends
@@ -1852,12 +1845,15 @@ async function updateLiveGroupNow(managedTabs, options = {}) {
     );
   }
 
+  stillCurrent();
   await remember(groupId);
   if (await yieldGroupIfHeldElsewhere(groupId)) return;
+  stillCurrent();
   await muteAutoLurkTabs();
 
   // Moving tabs clears the one that was in front. Put it back so the server
   // check is still looking at a visible stream in the same window.
+  stillCurrent();
   if (keepInFront != null) {
     try {
       const tab = await chrome.tabs.get(keepInFront);
