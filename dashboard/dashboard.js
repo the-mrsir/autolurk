@@ -387,6 +387,14 @@ function renderBanners(snap) {
     banners.push({ tone: "info", text: "AutoLurk is paused. Nothing will open or close automatically." });
   }
 
+  if (snap.activeComputer && !snap.activeComputer.here) {
+    banners.push({
+      tone: "info",
+      text: `AutoLurk is running on ${snap.activeComputer.name || "another computer"}. This computer leaves every tab alone.`,
+      action: { id: "run-here", label: "Run here" },
+    });
+  }
+
   // 7TV rebuilds parts of the Twitch page, which is the usual explanation when
   // the player readings or the points chest cannot be found.
   if (snap.sevenTvExtension) {
@@ -397,9 +405,29 @@ function renderBanners(snap) {
   }
 
   $("banners").innerHTML = banners
-    .map((banner) => `<div class="banner ${banner.tone}">${escapeHtml(banner.text)}</div>`)
+    .map(
+      (banner) =>
+        `<div class="banner ${banner.tone}">${escapeHtml(banner.text)}${
+          banner.action
+            ? ` <button type="button" data-banner-action="${escapeHtml(banner.action.id)}">${escapeHtml(banner.action.label)}</button>`
+            : ""
+        }</div>`
+    )
     .join("");
 }
+
+$("banners").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-banner-action]");
+  if (!button) return;
+  if (button.dataset.bannerAction === "run-here") {
+    button.disabled = true;
+    try {
+      await send(MESSAGE.RUN_HERE);
+    } finally {
+      await refresh();
+    }
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Multistream

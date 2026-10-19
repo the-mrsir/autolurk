@@ -12,6 +12,18 @@ export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export class TimeoutError extends Error {}
+
+// A browser call that never answers would otherwise hold every queue behind
+// it forever. The work keeps running; only the wait for it ends.
+export function withTimeout(promise, ms, label = "Task") {
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new TimeoutError(`${label} took longer than ${Math.round(ms / 1000)}s`)), ms);
+  });
+  return Promise.race([Promise.resolve(promise), limit]).finally(() => clearTimeout(timer));
+}
+
 export function normalizeLogin(value) {
   return String(value || "")
     .trim()

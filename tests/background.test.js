@@ -29,6 +29,7 @@ const {
   adoptNavigatedChannel,
   enforceSyncedFavoriteIntent,
   handleChannelChanged,
+  handleManagedNavigation,
   handleManualTabClose,
   reconciliationNeedsAnotherPass,
   reconcileGroupedStreams,
@@ -733,7 +734,7 @@ describe("a stream someone is watching", () => {
     assert.notOk(mock.tabState.has(1));
   });
 
-  it("keeps a raid open that another computer is watching", async () => {
+  it("closes a raided tab even when another computer had it open", async () => {
     mock.reset({
       tabs: [
         { id: 9, url: "https://www.twitch.tv/other", active: true },
@@ -745,10 +746,31 @@ describe("a stream someone is watching", () => {
 
     await handleChannelChanged(1, "raider");
 
-    assert.ok(mock.tabState.has(1), "closing it here would close it on the other computer");
+    assert.notOk(mock.tabState.has(1), "the raided stream stayed open");
   });
 
-  it("reloads instead of reopening a stream another computer is watching", async () => {
+  it("closes a raided tab that was unmuted earlier but is not being looked at", async () => {
+    mock.reset({
+      tabs: [
+        { id: 9, url: "https://www.twitch.tv/other", active: true },
+        { id: 1, url: "https://www.twitch.tv/raider", active: false },
+      ],
+      storage: {
+        managedTabs: { "1": managed(1, { ...old, userUnmuted: true }) },
+        settings: { closeRaids: true },
+      },
+    });
+
+    await handleChannelChanged(1, "raider");
+    await handleManagedNavigation(1, "https://www.twitch.tv/raider");
+
+    assert.notOk(mock.tabState.has(1), "an old unmute kept the raided stream open");
+    const { getActivity } = await import("../shared/storage.js");
+    const raids = (await getActivity()).filter((item) => item.text.startsWith("Raid detected"));
+    assert.equal(raids.length, 1, "one raid was logged twice");
+  });
+
+  it("reopens a stuck stream whatever an old note from another computer says", async () => {
     mock.reset({
       tabs: [
         { id: 9, url: "https://www.twitch.tv/other", active: true },
@@ -763,38 +785,20 @@ describe("a stream someone is watching", () => {
 
     await runRecovery(1, (await getManagedTabs())["1"], "stalled", { force: true, allowNavigation: true });
 
-    assert.ok(mock.tabState.has(1), "the reopen closed the stream on the other computer");
-    assert.equal((await getManagedTabs())["1"]?.recoveryStage, RECOVERY_STAGE.RELOAD);
+    assert.notOk(mock.tabState.has(1), "a note from another computer held a stuck stream");
   });
 
-  it("ignores a watching note that has gone stale", async () => {
-    mock.reset({
-      tabs: [
-        { id: 9, url: "https://www.twitch.tv/other", active: true },
-        { id: 1, url: "https://www.twitch.tv/streamer", active: false },
-      ],
-      storage: {
-        managedTabs: { "1": managed(1, { health: HEALTH.STALLED, recoveryAttempts: 2, mediaPlaying: false }) },
-        settings: { serverRotation: true },
-      },
-    });
-    mock.seedSync({ "watching:laptop": { logins: ["streamer"], at: NOW() - 10 * 60_000 } });
-
-    await runRecovery(1, (await getManagedTabs())["1"], "stalled", { force: true, allowNavigation: true });
-
-    assert.notOk(mock.tabState.has(1), "a stale note should not hold a stuck stream forever");
-  });
-
-  it("tells the other computers which channel is in front here", async () => {
+  it("clears the watching note older versions left in sync", async () => {
     resetWatchingForTests();
     mock.reset({
       tabs: [{ id: 1, url: "https://www.twitch.tv/streamer", active: true }],
       storage: { managedTabs: { "1": managed(1) }, meta: { machineId: "desk" } },
     });
+    mock.seedSync({ "watching:desk": { logins: ["streamer"], at: NOW() } });
 
     await publishWatching(await getManagedTabs());
 
-    assert.deepEqual(mock.sync["watching:desk"]?.logins, ["streamer"]);
+    assert.equal(mock.sync["watching:desk"], undefined);
   });
 
   it("does not count a server's rotation tab as watched", async () => {

@@ -1,19 +1,12 @@
-// Which streams a person is looking at, here and on the other computers.
-//
-// Brave mirrors the AutoLurk group, so a tab that another computer closes in
-// that group closes here too. Every automatic close and reopen checks this
-// first, and each computer publishes what it is showing in sync storage so the
-// others can check it as well.
+// Which streams a person is looking at on this computer. Duplicate and
+// lower-priority closes leave these alone; raids and ended streams only spare
+// the one the person is looking at right now.
 
 import { getSettings } from "../shared/storage.js";
 import { extractChannelFromUrl } from "../shared/utilities.js";
 import { machineId } from "./group-claim.js";
 
 export const WATCHING_PREFIX = "watching:";
-export const WATCHING_TIMING = {
-  freshMs: 5 * 60_000,
-  refreshMs: 2 * 60_000,
-};
 
 let lastPublished = { key: "", at: 0 };
 
@@ -59,51 +52,36 @@ export async function watchedHere(managed = {}) {
   return { tabIds, logins };
 }
 
-export async function publishWatching(managed, now = Date.now()) {
+// Older versions shared what each computer was showing. Only one computer
+// runs AutoLurk now, so this just clears this computer's old note once.
+export async function publishWatching(_managed, now = Date.now()) {
   const area = syncArea();
-  if (!area || (await getSettings()).syncEnabled === false) return;
-  const { logins } = await watchedHere(managed);
-  const list = [...logins].sort();
-  const key = list.join(",");
-  if (key === lastPublished.key && now - lastPublished.at < WATCHING_TIMING.refreshMs) return;
-  const storageKey = `${WATCHING_PREFIX}${await machineId()}`;
-  try {
-    if (list.length) await area.set({ [storageKey]: { logins: list, at: now } });
-    else if (lastPublished.key || !lastPublished.at) await area.remove(storageKey);
-    lastPublished = { key, at: now };
-  } catch {
-    // Quota or offline. The next pass tries again.
-  }
+  if (!area || lastPublished.at) return;
+  lastPublished = { key: "", at: now };
+  await area.remove(`${WATCHING_PREFIX}${await machineId()}`).catch(() => {});
 }
 
-export async function watchedElsewhere(now = Date.now()) {
-  const logins = new Set();
-  const area = syncArea();
-  if (!area || (await getSettings()).syncEnabled === false) return logins;
-  let all = {};
-  try {
-    all = (await area.get(null)) || {};
-  } catch {
-    return logins;
-  }
-  const mine = `${WATCHING_PREFIX}${await machineId()}`;
-  for (const [key, value] of Object.entries(all)) {
-    if (!key.startsWith(WATCHING_PREFIX) || key === mine) continue;
-    if (now - Number(value?.at || 0) >= WATCHING_TIMING.freshMs) continue;
-    for (const login of value?.logins || []) logins.add(String(login).toLowerCase());
-  }
-  return logins;
-}
-
-// Everything a close has to respect: tabs in front here, and channels being
-// watched on another computer.
+// What a duplicate or lower-priority close has to respect on this computer.
 export async function watchedStreams(managed = {}) {
-  const [here, elsewhere] = await Promise.all([watchedHere(managed), watchedElsewhere()]);
-  return {
-    tabIds: here.tabIds,
-    logins: new Set([...here.logins, ...elsewhere]),
-    elsewhere,
-  };
+  const here = await watchedHere(managed);
+  return { tabIds: here.tabIds, logins: here.logins, elsewhere: new Set() };
+}
+
+// The stream the person is looking at right now: the tab in front of the
+// focused window. A server's front tab is picked by rotation, so it has none.
+// Raids and ended streams close everything else.
+export async function lookingAt() {
+  const tabIds = new Set();
+  if ((await getSettings()).serverRotation === true) return tabIds;
+  try {
+    const window = await chrome.windows.getLastFocused();
+    if (!window?.focused || window.state === "minimized" || window.type !== "normal") return tabIds;
+    const [tab] = await chrome.tabs.query({ active: true, windowId: window.id });
+    if (tab?.id != null && extractChannelFromUrl(tab.url)) tabIds.add(Number(tab.id));
+  } catch {
+    // No window to look at.
+  }
+  return tabIds;
 }
 
 export function isWatched(watched, tabId, login) {

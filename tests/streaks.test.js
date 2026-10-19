@@ -8,7 +8,12 @@ import {
   STREAK_TIMING,
 } from "../shared/streak-logic.js";
 import { getActivity, getSessionValue, saveSettings, setSessionValue } from "../shared/storage.js";
-import { noteStreakTabClosed, scanWatchStreaks, tickWatchStreaks } from "../background/streaks.js";
+import {
+  STREAK_LIMITS,
+  noteStreakTabClosed,
+  scanWatchStreaks,
+  tickWatchStreaks,
+} from "../background/streaks.js";
 
 const mock = chromeMock();
 const FUTURE = "2099-01-01T00:00:00.000Z";
@@ -317,6 +322,36 @@ describe("watch streak recovery", () => {
       await tickWatchStreaks();
       assert.equal((await recoveryTabs()).length, 0);
       assert.ok((await activityText()).includes("Watch streak for Aztecross recovered."));
+    } finally {
+      restore();
+    }
+  });
+
+  it("reports a Twitch page that never answers instead of waiting forever", async () => {
+    const world = { expiresAt: FUTURE, missedIds: [], progress: { hasVideo: false, readyState: 0, currentTime: 0 } };
+    const restore = install(world);
+    mock.setContentScript(7, () => new Promise(() => {}));
+    const limit = STREAK_LIMITS.queryMs;
+    STREAK_LIMITS.queryMs = 50;
+    try {
+      await scanWatchStreaks();
+      const text = await activityText();
+      assert.ok(text.includes("did not answer the streak query"), text);
+      mock.setContentScript(7, (message) => answer(world, message));
+      await scanWatchStreaks();
+      assert.equal((await recoveryTabs()).length, 1, "the next scan did not run");
+    } finally {
+      STREAK_LIMITS.queryMs = limit;
+      restore();
+    }
+  });
+
+  it("says how many favorites it checked when nothing is expiring", async () => {
+    const world = { expiresAt: null, missedIds: [], progress: { hasVideo: false, readyState: 0, currentTime: 0 } };
+    const restore = install(world);
+    try {
+      await scanWatchStreaks();
+      assert.ok((await activityText()).includes("Checked watch streaks for 1 favorite. None are expiring."));
     } finally {
       restore();
     }

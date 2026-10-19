@@ -42,6 +42,8 @@ import {
   notifyEnabled,
   now,
   shouldAutoOpenForCategory,
+  TimeoutError,
+  withTimeout,
 } from "../shared/utilities.js";
 import {
   notifyGameChange,
@@ -49,7 +51,8 @@ import {
   notifyTitleChange,
 } from "./notifications.js";
 import { pointsSummary } from "../shared/points-logic.js";
-import { logActivity } from "./activity.js";
+import { logActivity, logStuck } from "./activity.js";
+import { activeComputerState, standingBy } from "./active-computer.js";
 import { recordFavoriteRemoval, schedulePush } from "./sync.js";
 import { prefetchSevenTv } from "./seventv.js";
 import { multistreamSnapshot } from "./multistream.js";
@@ -72,7 +75,7 @@ import {
   updateLiveGroup,
   urlLeftExpectedChannel,
 } from "./tab-manager.js";
-import { isWatched, watchedHere, watchedStreams } from "./watching.js";
+import { isWatched, lookingAt, watchedHere, watchedStreams } from "./watching.js";
 import {
   API_FAILURE,
   getFollowedChannels,
@@ -169,7 +172,7 @@ export async function reconcileGroupedStreams(
       continue;
     }
     if (!settings.autoCloseOffline || favorite?.autoClose === false) continue;
-    if ((await watchedHere(await getManagedTabs())).tabIds.has(Number(tab.tabId))) continue;
+    if ((await lookingAt()).has(Number(tab.tabId))) continue;
     if (await closeGroupedStreamTab(tab.tabId)) {
       await logActivity(
         `Closed offline synced-group tab — ${channel.displayName || channel.login}`,
@@ -279,8 +282,15 @@ export function reconciliationNeedsAnotherPass(record, at = Date.now()) {
 // Restores the managed registry from favorites and whatever Twitch tabs are
 // already open. A live poll and the local monitor are not required: a failed
 // heartbeat must not be what decides whether these channels exist.
+export const RECONCILE_LIMIT_MS = 15 * 60_000;
+
 export function reconcileStartupChannels() {
-  const run = startupReconcileChain.then(runStartupReconciliation, runStartupReconciliation);
+  const work = () =>
+    withTimeout(runStartupReconciliation(), RECONCILE_LIMIT_MS, "Restoring streams").catch((error) => {
+      if (error instanceof TimeoutError) logStuck("Restoring streams");
+      throw error;
+    });
+  const run = startupReconcileChain.then(work, work);
   startupReconcileChain = run.then(
     () => {},
     () => {}
@@ -300,6 +310,7 @@ async function rememberReconciliation(record) {
 }
 
 async function runStartupReconciliation() {
+  if (await standingBy()) return null;
   const startedAt = Date.now();
   const previous = await getSessionValue(SESSION_KEYS.RECONCILE, null);
   const record = {
@@ -453,6 +464,7 @@ async function runStartupReconciliation() {
 export async function adoptNavigatedChannel(tabId, url) {
   const login = extractChannelFromUrl(url);
   if (!login) return null;
+  if (await standingBy()) return null;
   const settings = await getSettings();
   if (!settings.automationEnabled || !settings.autoOpenFavorites) return null;
 
@@ -476,6 +488,7 @@ export async function adoptNavigatedChannel(tabId, url) {
 }
 
 export async function enforceSyncedFavoriteIntent() {
+  if (await standingBy()) return;
   const [favorites, follows, meta] = await Promise.all([
     getFavorites(),
     getFollows(),
@@ -722,11 +735,17 @@ export async function unsnoozeStream(userId) {
   return true;
 }
 
+// Opening several streams waits on each one's playback, so a long poll is
+// normal. One that outlasts this is waiting on something that will not answer.
+export const POLL_LIMIT_MS = 6 * 60_000;
+
 export function pollLiveState(options = {}) {
-  const result = pollChain.then(
-    () => runLivePoll(options),
-    () => runLivePoll(options)
-  );
+  const run = () =>
+    withTimeout(runLivePoll(options), POLL_LIMIT_MS, "Live check").catch((error) => {
+      if (error instanceof TimeoutError) logStuck("Live check");
+      throw error;
+    });
+  const result = pollChain.then(run, run);
   pollChain = result.then(() => {}, () => {});
   return result;
 }
@@ -739,6 +758,13 @@ async function runLivePoll(options = {}) {
   const auth = await getAuth();
   if (!auth.accessToken || !auth.userId) {
     throw new Error("Connect Twitch before refreshing.");
+  }
+  if (await standingBy()) {
+    if (options.force) {
+      const { name } = await activeComputerState();
+      throw new Error(`AutoLurk is running on ${name || "another computer"}. Click Run here to use this one.`);
+    }
+    return { opened: 0, liveFavoriteCount: 0, status: POLL_STATUS.OK, skipped: true };
   }
 
   await reconcileManagedTabs();
@@ -1072,8 +1098,8 @@ async function handleOfflineCloses(favorites, nextLive, covered, settings, optio
       .map((entry) => String(entry.userId))
   );
 
-  // A stream in front of the user waits until they look away.
-  const inFront = (await watchedHere(managed)).tabIds;
+  // A stream the user is looking at waits until they look away.
+  const inFront = await lookingAt();
   const dueCloses = [];
   await mutatePendingCloses((pending) => {
     for (const entry of entries) {
@@ -1216,16 +1242,26 @@ export async function handleManagedNavigation(tabId, url) {
   }
 }
 
-// A raid someone is watching goes on as their own tab, out of the group, so
-// neither computer closes it.
+// The page reports the new channel and the URL changes, so a raid arrives
+// twice. Only the first one acts.
+const raidsHandling = new Set();
+
+// A raid the person is looking at goes on as their own tab. Every other
+// raided tab closes.
 async function endRaidedTab(tabId, entry, next) {
-  await logActivity(`Raid detected: ${entry.expectedChannel} → ${next}`);
-  const watched = await watchedStreams(await getManagedTabs());
-  if (isWatched(watched, tabId, entry.expectedChannel) || isWatched(watched, -1, next)) {
-    await releaseManagedTab(entry.userId);
-    await chrome.tabs.ungroup(Number(tabId)).catch(() => {});
-  } else {
-    await closeManagedTab(tabId);
+  const id = Number(tabId);
+  if (raidsHandling.has(id)) return;
+  raidsHandling.add(id);
+  try {
+    await logActivity(`Raid detected: ${entry.expectedChannel} → ${next}`);
+    if ((await lookingAt()).has(id)) {
+      await releaseManagedTab(entry.userId);
+      await chrome.tabs.ungroup(id).catch(() => {});
+    } else if (await closeManagedTab(id)) {
+      await logActivity(`Closed ${entry.displayName || entry.login} after the raid`, { channel: entry.login });
+    }
+  } finally {
+    raidsHandling.delete(id);
   }
   await buildSnapshot();
   await updateBadge();
@@ -1384,6 +1420,7 @@ export async function buildSnapshot() {
       rateLimitedUntil: state.meta.rateLimitedUntil || 0,
     },
     automationPaused: !state.settings.automationEnabled,
+    activeComputer: await activeComputerState().catch(() => ({ here: true, name: "" })),
     points: pointsSummary(state.channelPoints),
     sync: {
       enabled: state.settings.syncEnabled !== false && Boolean(normalizeSyncGroup(state.settings.syncGroup)),

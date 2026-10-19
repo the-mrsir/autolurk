@@ -346,6 +346,7 @@ export const DEFAULT_META = {
   // Set when a wake happened but the poll could not say which streams are
   // still live. Managed tabs stay frozen until it clears.
   wakeRecheckPending: false,
+  wakePendingSince: 0,
   // Cross-machine sync bookkeeping.
   syncedAt: 0,
   settingsUpdatedAt: 0,
@@ -356,6 +357,7 @@ export const DEFAULT_META = {
 
 export const MESSAGE = {
   GET_STATE: "GET_STATE",
+  RUN_HERE: "RUN_HERE",
     CONNECT: "CONNECT",
     POLL_DEVICE: "POLL_DEVICE",
     CANCEL_CONNECT: "CANCEL_CONNECT",

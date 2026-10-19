@@ -8,6 +8,7 @@ import { nextServerTarget, serverReportWorking } from "../shared/server-logic.js
 import { getManagedTabs, getSessionValue, getSettings, mutateSessionValue } from "../shared/storage.js";
 import { managedChannelUrl } from "../shared/utilities.js";
 import { logActivity } from "./activity.js";
+import { standingBy } from "./active-computer.js";
 import { ensureTabMuted, handlePlayerHealth } from "./stream-boot.js";
 import { focusTab, pinQualityForTab } from "./tab-manager.js";
 
@@ -80,6 +81,7 @@ const ROTATE_GAP_MS = 100_000;
 export async function rotateServerStreamsIfDue() {
   const settings = await getSettings();
   if (!settings.serverRotation || settings.automationEnabled === false) return null;
+  if (await standingBy()) return null;
   const now = Date.now();
   let due = false;
   await mutateSessionValue(SESSION_KEYS.SERVER, {}, (current) => {

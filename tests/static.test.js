@@ -37,6 +37,7 @@ const SOURCES = [
   "background/group-claim.js",
   "background/watching.js",
   "background/memory-guard.js",
+  "background/active-computer.js",
   "dashboard/dashboard.js",
   "dashboard/update-client.js",
   "dashboard/watchdog-client.js",

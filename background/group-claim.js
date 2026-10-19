@@ -5,7 +5,7 @@
 // or open a closed saved group. So the computer holding the group says so in
 // sync storage, and the others check that before they create one.
 
-import { getMeta, getSettings, mutateMeta } from "../shared/storage.js";
+import { getMeta, mutateMeta } from "../shared/storage.js";
 
 export const GROUP_CLAIM_KEY = "groupClaim";
 export const GROUP_CLAIM_TIMING = {
@@ -19,9 +19,10 @@ function syncArea() {
   return chrome.storage?.sync || null;
 }
 
+// AutoLurk now runs on one computer at a time (see active-computer.js), so no
+// other computer is making groups to defer to.
 async function claimAllowed() {
-  if (!syncArea()) return false;
-  return (await getSettings()).syncEnabled !== false;
+  return false;
 }
 
 export async function machineId() {

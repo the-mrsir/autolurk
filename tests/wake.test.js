@@ -216,6 +216,29 @@ describe("waking with streams still open", () => {
     assert.equal(mock.local.managedTabs["12"], undefined, "the ended stream should close now");
   });
 
+  it("stops waiting for a complete check after ten minutes", async () => {
+    mock.reset({ tabs: sleepingTabs, storage: sleepingProfile() });
+    globalThis.fetch = async () => {
+      throw new Error("net::ERR_INTERNET_DISCONNECTED");
+    };
+
+    const { runWakeRecovery, handleHealthTick, WAKE_FREEZE_LIMIT_MS } = await import("../background/wake.js");
+    const start = Date.now();
+    await runWakeRecovery(4 * 60 * 60_000, start);
+    await handleHealthTick(start + 60_000);
+    assert.equal((mock.local.meta || {}).wakeRecheckPending, true, "gave up before the limit");
+
+    mock.local.meta.lastHealthTickAt = start + WAKE_FREEZE_LIMIT_MS;
+    await handleHealthTick(start + WAKE_FREEZE_LIMIT_MS + 1000);
+
+    assert.equal((mock.local.meta || {}).wakeRecheckPending, false, "the freeze never ended");
+    for (const entry of Object.values(mock.local.managedTabs || {})) {
+      assert.ok(entry.health !== "suspended", "a tab stayed suspended");
+    }
+    const { getActivity } = await import("../shared/storage.js");
+    assert.ok((await getActivity()).some((item) => item.text.includes("Going back to normal checks")));
+  });
+
   it("freezes the tabs so a parallel health check cannot restart dead streams", async () => {
     // The freeze is the whole reason a wake is handled separately: without it
     // the health check reads all these stale timestamps as stalled streams and

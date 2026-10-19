@@ -16,6 +16,7 @@ import { HEALTH } from "../shared/health.js";
 import { POLL_STATUS } from "../shared/poll-logic.js";
 import { getManagedTabs, getMeta, mutateManagedTabs, mutateMeta } from "../shared/storage.js";
 import { logActivity } from "./activity.js";
+import { standingBy } from "./active-computer.js";
 import { pollLiveState } from "./stream-manager.js";
 import { runHealthCheck } from "./stream-boot.js";
 
@@ -25,6 +26,7 @@ import { runHealthCheck } from "./stream-boot.js";
 // nothing quiet for five minutes is still playing. Treating a long stall as a
 // wake is therefore harmless even when the machine never actually slept.
 export const WAKE_GAP_MS = 5 * 60_000;
+export const WAKE_FREEZE_LIMIT_MS = 10 * 60_000;
 
 // Pure so the threshold can be tested without faking alarms or clocks.
 export function detectWakeGap(lastTickAt, at, gapMs = WAKE_GAP_MS) {
@@ -56,6 +58,7 @@ export function describeGap(ms) {
 // of a wake whose poll could not run.
 export async function handleHealthTick(at = Date.now()) {
   const gap = await noteHealthTick(at);
+  if (await standingBy()) return null;
   if (gap) return runWakeRecovery(gap, at);
 
   const meta = await getMeta();
@@ -72,7 +75,12 @@ export async function runWakeRecovery(gapMs, at = Date.now(), options = {}) {
   const before = await getManagedTabs();
   const count = Object.keys(before).length;
 
-  await mutateMeta((meta) => ({ ...meta, lastWakeAt: at, lastWakeGapMs: gapMs }));
+  await mutateMeta((meta) => ({
+    ...meta,
+    lastWakeAt: at,
+    lastWakeGapMs: gapMs,
+    ...(options.retry ? {} : { wakePendingSince: 0 }),
+  }));
 
   if (count === 0) {
     // Still worth a poll: favorites may have gone live during the sleep.
@@ -130,12 +138,27 @@ export async function runWakeRecovery(gapMs, at = Date.now(), options = {}) {
   // either closing a tab whose stream is fine or restarting one that ended.
   // No network yet is the normal case on wake — Wi-Fi reconnects after the
   // browser resumes — so the tabs stay frozen and the next tick tries again.
+  //
+  // The freeze also stops every close and health check, so it cannot outlast
+  // a Twitch outage or one channel the API keeps failing on. Past the limit
+  // the ordinary checks take over with their usual grace periods.
   if (status !== POLL_STATUS.OK) {
-    await mutateMeta((meta) => ({ ...meta, wakeRecheckPending: true }));
-    return { closed: 0, resumed: 0, deferred: true };
+    let since = 0;
+    await mutateMeta((meta) => {
+      since = Number(meta.wakePendingSince) || at;
+      return { ...meta, wakeRecheckPending: true, wakePendingSince: since };
+    });
+    if (at - since < WAKE_FREEZE_LIMIT_MS) return { closed: 0, resumed: 0, deferred: true };
+    await mutateMeta((meta) => ({ ...meta, wakeRecheckPending: false, wakePendingSince: 0 }));
+    await logActivity("Twitch could not be fully checked after waking. Going back to normal checks.", {
+      level: "warn",
+    });
+    await thawSuspendedTabs();
+    await runHealthCheck();
+    return { closed: 0, resumed: Object.keys(await getManagedTabs()).length, gaveUp: true };
   }
 
-  await mutateMeta((meta) => ({ ...meta, wakeRecheckPending: false }));
+  await mutateMeta((meta) => ({ ...meta, wakeRecheckPending: false, wakePendingSince: 0 }));
 
   const survivors = await getManagedTabs();
   const closed = count - Object.keys(survivors).length;
@@ -145,7 +168,22 @@ export async function runWakeRecovery(gapMs, at = Date.now(), options = {}) {
   // costs no screen time and is often all a paused player needs — and how to
   // escalate to a restart and stagger those one per pass. The cooldown is
   // cleared so the first attempt happens now instead of in 45 seconds.
-  await mutateManagedTabs((managed) => {
+  await thawSuspendedTabs();
+
+  const resumed = Object.keys(survivors).length;
+  if (closed) {
+    await logActivity(`Closed ${closed} stream${closed === 1 ? "" : "s"} that ended while asleep`);
+  }
+  if (resumed) {
+    await logActivity(`Restarting ${resumed} stream${resumed === 1 ? "" : "s"} that are still live`);
+  }
+
+  await runHealthCheck();
+  return { closed, resumed };
+}
+
+function thawSuspendedTabs() {
+  return mutateManagedTabs((managed) => {
     for (const [tabId, entry] of Object.entries(managed)) {
       managed[tabId] = {
         ...entry,
@@ -160,15 +198,4 @@ export async function runWakeRecovery(gapMs, at = Date.now(), options = {}) {
     }
     return managed;
   });
-
-  const resumed = Object.keys(survivors).length;
-  if (closed) {
-    await logActivity(`Closed ${closed} stream${closed === 1 ? "" : "s"} that ended while asleep`);
-  }
-  if (resumed) {
-    await logActivity(`Restarting ${resumed} stream${resumed === 1 ? "" : "s"} that are still live`);
-  }
-
-  await runHealthCheck();
-  return { closed, resumed };
 }

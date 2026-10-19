@@ -15,9 +15,12 @@ import {
   managedChannelUrl,
   normalizeLogin,
   twitchChannelUrl,
+  TimeoutError,
+  withTimeout,
 } from "../shared/utilities.js";
 import { streamIsOpenable } from "../shared/poll-logic.js";
-import { logActivity } from "./activity.js";
+import { logActivity, logStuck } from "./activity.js";
+import { standingBy } from "./active-computer.js";
 import { groupHeldElsewhere, holdGroupClaim, releaseGroupClaim } from "./group-claim.js";
 import { memoryIsLow } from "./memory-guard.js";
 import { watchedStreams } from "./watching.js";
@@ -489,7 +492,16 @@ export function isBootstrapActivation(tabId) {
   return bootstrapCreateDepth > 0 || bootstrappingTabIds.has(Number(tabId));
 }
 
-function withBootstrapLock(run) {
+// Past the playback wait plus page load. Anything longer is a browser call
+// that is not coming back.
+export const BOOTSTRAP_LIMIT_MS = 3 * 60_000;
+
+function withBootstrapLock(work) {
+  const run = () =>
+    withTimeout(work(), BOOTSTRAP_LIMIT_MS, "Opening a stream").catch((error) => {
+      if (error instanceof TimeoutError) logStuck("Opening a stream");
+      throw error;
+    });
   const result = bootstrapChain.then(run, run);
   bootstrapChain = result.then(
     () => {},
@@ -1592,8 +1604,18 @@ export function resetGroupRepairLimit() {
 }
 (globalThis.__autoLurkTestResets ||= []).push(resetGroupRepairLimit);
 
+export const GROUP_UPDATE_LIMIT = { ms: 30_000 };
+
 export function updateLiveGroup(managedTabs, options = {}) {
-  const run = () => (groupRepairAllowed() ? updateLiveGroupNow(managedTabs, options) : undefined);
+  const run = () =>
+    groupRepairAllowed()
+      ? withTimeout(updateLiveGroupNow(managedTabs, options), GROUP_UPDATE_LIMIT.ms, "Tab group repair").catch(
+          (error) => {
+            if (error instanceof TimeoutError) return logStuck("Tab group repair");
+            throw error;
+          }
+        )
+      : undefined;
   const result = groupUpdateChain.then(run, run);
   groupUpdateChain = result.then(
     () => {},
@@ -1915,6 +1937,7 @@ async function yieldGroupIfHeldElsewhere(groupId) {
 export async function consolidateIfSplit() {
   const settings = await getSettings();
   if (!settings.groupTabs) return false;
+  if (await standingBy()) return false;
   await muteAutoLurkTabs();
 
   const dupesClosed = await closeDuplicateStreamTabs(await chrome.tabs.query({}));

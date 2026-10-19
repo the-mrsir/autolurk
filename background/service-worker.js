@@ -11,6 +11,7 @@ import {
   getMeta,
   getSessionValue,
   getSettings,
+  mutateManagedTabs,
   mutateMeta,
   saveMeta,
   saveSettings,
@@ -50,6 +51,14 @@ import { noteStreakTabClosed, scanWatchStreaks, stopWatchStreaks, tickWatchStrea
 import { checkForUpdate } from "./updates.js";
 import { publishWatching } from "./watching.js";
 import { guardMemory } from "./memory-guard.js";
+import {
+  ACTIVE_COMPUTER_KEY,
+  resetActiveComputer,
+  runHere,
+  runsHere,
+  standingBy,
+  whenRoleChanges,
+} from "./active-computer.js";
 import {
   addChannelByLogin,
   adoptNavigatedChannel,
@@ -96,6 +105,7 @@ import {
 import { handleHealthTick, runWakeRecovery, WAKE_GAP_MS } from "./wake.js";
 import { parkWatchdog, readWatchdogSettings, runWatchdogHeartbeat, saveWatchdogSettings } from "./watchdog.js";
 import {
+  clearBootWatch,
   consumeExtensionMute,
   handleBootWatchAlarm,
   handlePlayerBoot,
@@ -105,6 +115,22 @@ import {
   resetHealth,
   runHealthCheck,
 } from "./stream-boot.js";
+
+// Standing by lets go of every stream without closing it: Brave mirrors the
+// running computer's group here, and those tabs are that computer's to manage.
+// Taking over finds the open streams again and checks Twitch straight away.
+whenRoleChanges(async (here) => {
+  if (here) {
+    await reconcileStartupChannels().catch(() => null);
+    await pollLiveState().catch(() => null);
+  } else {
+    const before = await getManagedTabs();
+    await mutateManagedTabs(() => ({}));
+    for (const tabId of Object.keys(before)) await clearBootWatch(tabId).catch(() => {});
+  }
+  await buildSnapshot();
+  await updateBadge();
+});
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -428,6 +454,7 @@ const PAGE_MESSAGES = new Set([
   MESSAGE.EXPORT_DATA,
   MESSAGE.IMPORT_DATA,
   MESSAGE.CHECK_UPDATE,
+  MESSAGE.RUN_HERE,
   MESSAGE.WATCHDOG_GET,
   MESSAGE.WATCHDOG_SAVE,
   MESSAGE.START_MULTISTREAM,
@@ -581,6 +608,9 @@ async function handleMessage(message, sender) {
       return exportData();
     case MESSAGE.CHECK_UPDATE:
       return checkForUpdate(message.url);
+    case MESSAGE.RUN_HERE:
+      await runHere();
+      return buildSnapshot();
     case MESSAGE.IMPORT_DATA: {
       const result = await importData(message.payload);
       await buildSnapshot();
@@ -870,6 +900,7 @@ function scheduleGroupRepair() {
   groupRepairTimer = setTimeout(async () => {
     groupRepairTimer = null;
     try {
+      if (await standingBy()) return;
       await consolidateIfSplit();
       await muteAutoLurkTabs();
     } catch (error) {
@@ -899,6 +930,12 @@ chrome.tabGroups.onUpdated.addListener(noteAutoLurkGroup);
 
 chrome.storage.onChanged.addListener(async (changes, areaName) => {
   if (areaName !== "sync") return;
+  if (changes[ACTIVE_COMPUTER_KEY]) {
+    resetActiveComputer();
+    runsHere()
+      .then(() => buildSnapshot())
+      .catch((error) => console.warn("Active computer check failed", error));
+  }
   try {
     if (await handleSyncChange(changes)) {
       // Snooze and unfavorite are user intent, not live-state guesses. Apply

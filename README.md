@@ -12,7 +12,7 @@ Connect Twitch from the dashboard. Sign in on each computer. The Twitch login is
 
 ## What you get
 
-- Live favorites open as background tabs in one **AutoLurk** group. The tab you are using stays in front, unless **Open streams in front** is set to favorites or all. If Chrome opens that group from another signed-in computer, this computer uses that group.
+- Live favorites open as background tabs in one **AutoLurk** group. The tab you are using stays in front, unless **Open streams in front** is set to favorites or all.
 - **Server rotation** opens the next stream every 2 minutes, reloads it if it is not playing, and checks again. It stays on this computer.
 - The player stays unmuted. The Chrome tab is muted.
 - Background tabs and the stream you are looking at each have a quality setting. They start at 160p and 1080p.
@@ -27,6 +27,8 @@ Connect Twitch from the dashboard. Sign in on each computer. The Twitch login is
 Each computer makes its own sync code, shown under **Settings → Your other computers**. Computers on the same Chrome profile share favorites and settings when they use the same code. Copy the code from one computer and paste it into the other, then save.
 
 Both computers have to show the same extension ID on that page. Do not change or remove the `key` in `manifest.json`.
+
+AutoLurk runs on one of those computers at a time. The others leave every tab alone and show **Run here** on the dashboard. If the running computer is off for 10 minutes, the next one takes over.
 
 **Export backup** and **Import backup** move favorites and settings in a file. The Twitch login is left out.
 

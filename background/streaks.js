@@ -16,12 +16,15 @@ import {
   streakIsExpiring,
   videosOperation,
 } from "../shared/streak-logic.js";
-import { logActivity } from "./activity.js";
+import { TimeoutError, withTimeout } from "../shared/utilities.js";
+import { logActivity, logStuck } from "./activity.js";
+import { standingBy } from "./active-computer.js";
 
 const EMPTY = {
   queue: [],
   active: null,
-  authLogged: false,
+  okLoggedAt: 0,
+  failLoggedAt: 0,
   // userId -> expiresAt the user closed, so the same expiration is not reopened
   // until Twitch reports a different one.
   declined: {},
@@ -31,9 +34,15 @@ const EMPTY = {
 // two recovery videos for the same channel. Tab-close bookkeeping stays off
 // this lock: it runs while a close is already in progress.
 let pending = Promise.resolve();
+export const STREAK_LIMITS = { stepMs: 5 * 60_000, queryMs: 30_000 };
 
 function serialized(fn) {
-  const run = pending.then(fn, fn);
+  const work = () =>
+    withTimeout(fn(), STREAK_LIMITS.stepMs, "Watch streak check").catch((error) => {
+      if (error instanceof TimeoutError) return logStuck("Watch streak check");
+      throw error;
+    });
+  const run = pending.then(work, work);
   pending = run.then(
     () => {},
     () => {}
@@ -72,10 +81,12 @@ export function noteStreakTabClosed(tabId) {
 async function scanBody() {
   const settings = await getSettings();
   if (!settings.saveWatchStreaks || !settings.automationEnabled) return;
+  if (await standingBy()) return;
 
   const courier = await acquireCourier();
   try {
-    const jobs = await collectJobs(courier.tabId);
+    const { jobs, checked } = await collectJobs(courier.tabId);
+    await reportScan(checked, jobs.length);
     await session((state) => {
       const activeId = state.active?.userId;
       state.queue = jobs.filter(
@@ -99,6 +110,7 @@ async function tickBody() {
     return;
   }
   if (!settings.automationEnabled) return;
+  if (await standingBy()) return;
 
   const state = await session((current) => current);
   if (!state.active) {
@@ -133,7 +145,7 @@ async function collectJobs(tabId) {
     }))
     .filter((channel) => channel.login);
 
-  if (!channels.length) return [];
+  if (!channels.length) return { jobs: [], checked: 0 };
 
   const listed = [];
   for (let index = 0; index < channels.length; index += 8) {
@@ -198,7 +210,7 @@ async function collectJobs(tabId) {
       openedUrl,
     });
   }
-  return jobs;
+  return { jobs, checked: channels.length };
 }
 
 function edgeNodes(payload, field) {
@@ -388,18 +400,25 @@ async function postGql(tabId, operations) {
   let lastError = null;
   for (let attempt = 0; attempt < 8; attempt += 1) {
     try {
-      reply = await chrome.tabs.sendMessage(tabId, {
-        type: MESSAGE.STREAK_GQL,
-        clientId: TWITCH_WEB_CLIENT_ID,
-        operations,
-      });
+      // A tab Brave froze holds the message until it is shown again.
+      reply = await withTimeout(
+        chrome.tabs.sendMessage(tabId, {
+          type: MESSAGE.STREAK_GQL,
+          clientId: TWITCH_WEB_CLIENT_ID,
+          operations,
+        }),
+        STREAK_LIMITS.queryMs,
+        "Streak query"
+      );
       lastError = null;
       break;
     } catch (error) {
       lastError = error;
-      await delay(250);
+      if (error instanceof TimeoutError) break;
+      await delay(1000);
     }
   }
+  if (lastError instanceof TimeoutError) throw new Error("The Twitch page did not answer the streak query.");
   if (lastError) throw new Error("No Twitch page could run the streak query.");
   if (!reply?.ok) throw new Error(reply?.error || "Twitch streak query failed.");
   const body = Array.isArray(reply.body) ? reply.body : [reply.body];
@@ -409,11 +428,19 @@ async function postGql(tabId, operations) {
   return body;
 }
 
+// A background tab Brave has frozen never answers, so a tab in front is the
+// best courier, then any tab that is not frozen.
 async function acquireCourier() {
   const tabs = await chrome.tabs.query({ url: "https://www.twitch.tv/*" });
-  const ready = tabs.find((tab) => tab.status === "complete" && !tab.discarded && tab.id != null);
+  const usable = tabs.filter((tab) => tab.status === "complete" && !tab.discarded && !tab.frozen && tab.id != null);
+  const ready = usable.find((tab) => tab.active) || usable[0];
   if (ready) return { tabId: ready.id, owned: false };
   const created = await chrome.tabs.create({ url: "https://www.twitch.tv/", active: false });
+  for (let waited = 0; waited < 30_000; waited += 1000) {
+    const tab = await chrome.tabs.get(created.id).catch(() => null);
+    if (!tab || tab.status === "complete") break;
+    await delay(1000);
+  }
   return { tabId: created.id, owned: true };
 }
 
@@ -424,13 +451,32 @@ async function releaseCourier(courier) {
   await chrome.tabs.remove(courier.tabId).catch(() => {});
 }
 
+// Often enough to see that streaks are being watched, rare enough to keep the
+// activity list readable.
+const REPORT_EVERY_MS = 6 * 60 * 60_000;
+
+async function reportScan(checked, expiring) {
+  if (expiring) return;
+  let shouldLog = false;
+  await session((state) => {
+    if (Date.now() - (Number(state.okLoggedAt) || 0) < REPORT_EVERY_MS && !state.failLoggedAt) return undefined;
+    shouldLog = true;
+    state.okLoggedAt = Date.now();
+    state.failLoggedAt = 0;
+    return state;
+  });
+  if (shouldLog) {
+    await logActivity(`Checked watch streaks for ${checked} favorite${checked === 1 ? "" : "s"}. None are expiring.`);
+  }
+}
+
 async function reportQueryFailure(error) {
   const message = String(error?.message || "Twitch streak query failed.").slice(0, 180);
   let shouldLog = false;
   await session((state) => {
-    if (state.authLogged) return undefined;
+    if (Date.now() - (Number(state.failLoggedAt) || 0) < REPORT_EVERY_MS) return undefined;
     shouldLog = true;
-    state.authLogged = true;
+    state.failLoggedAt = Date.now();
     return state;
   });
   if (!shouldLog) return;

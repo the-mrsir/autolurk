@@ -68,6 +68,7 @@ async function helixFetch(path, params = {}, attempt = 0) {
         Authorization: `Bearer ${token}`,
         "Client-Id": resolveClientId(settings),
       },
+      ...(typeof AbortSignal?.timeout === "function" ? { signal: AbortSignal.timeout(20_000) } : {}),
     });
   } catch (error) {
     throw new TwitchApiError(API_FAILURE.NETWORK, "Could not reach Twitch.", {
